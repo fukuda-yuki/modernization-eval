@@ -5,6 +5,7 @@ The adapter adds supervision, not another acquisition engine or epoch format.
 It never changes config/genesis, model inputs, or existing saved evaluations.
 """
 import argparse
+from contextlib import contextmanager
 from datetime import datetime, timezone
 import importlib.util
 import json
@@ -187,7 +188,9 @@ def lease_held(path):
     import errno
     # Open errors are unknown, not proof that a legitimate owner holds a lock.
     with Path(path).open('rb') as stream:
-        if not stream.read(1):raise ValueError('Uninitialized ownership lock')
+        # Windows mandatory byte locks also deny reads through another handle.
+        # Metadata and the lock operation establish state without reading bytes.
+        if os.fstat(stream.fileno()).st_size < 1:raise ValueError('Uninitialized ownership lock')
         stream.seek(0)
         if os.name=='nt':
             import msvcrt
@@ -321,6 +324,55 @@ def watch_owner(owner, lease, done, stop):
             stop(); return
 
 
+def acquired_ownership(directory, value, child_record):
+    """A live PID or a busy lock alone never proves this invocation owns it."""
+    from research import live_pilot
+    from outer.harness import util
+    directory=Path(directory);path=directory/'controller-owned.json'
+    if not path.exists():return False
+    proof=util.read_json(path)
+    expected=dict(kind='pipeline_controller_ownership_v1',controller=child_record,
+        supervisor=value['supervisor'],config=value['config'],
+        invocation=live_pilot.reference(directory/'bound-invocation.json'))
+    if proof!=expected or util.read_json(directory/'controller.json')!=child_record:
+        raise ValueError('Controller ownership receipt differs from this child/invocation')
+    return True
+
+
+def close_registered(config,value,directory,reason,child,child_record,cached=()):
+    """Stop only after bound acquisition; pre-owner failure terminates our child.
+
+    After child exit, reacquire the campaign lock before touching its resources.
+    A different legitimate owner that won that race must remain untouched.
+    """
+    from research import pair_execution,campaign_launcher
+    try:owned=acquired_ownership(directory,value,child_record)
+    except (OSError,ValueError):owned=False
+    if not owned:
+        campaign_launcher._terminate(child)
+        # Acquisition/receipt publication can race the local termination above.
+        try:owned=acquired_ownership(directory,value,child_record)
+        except (OSError,ValueError):owned=False
+    if not owned:
+        return dict(ownership_acquired=False,campaign_stop_requested=False,
+                    owned_closure_confirmed=False,reason='controller_never_acquired_or_unproven')
+    def stop():
+        return dict(close_owned(config,value['repo'],Path(directory)/'supervisor-stop',reason,child,cached),
+                    ownership_acquired=True,campaign_stop_requested=True)
+    # End only our registered child before taking over the campaign lease. A
+    # proof of past ownership must not authorize stopping a newer direct owner
+    # that acquired the lease as this controller was unwinding.
+    if child.poll() is None:campaign_launcher._terminate(child)
+    # Separate lock acquisition failures from errors inside owned cleanup.
+    ownership=pair_execution.exclusive(Path(config['root'])/'_owner')
+    try:ownership.__enter__()
+    except OSError:
+        return dict(ownership_acquired=True,campaign_stop_requested=False,
+                    owned_closure_confirmed=False,reason='campaign_has_another_owner')
+    try:return stop()
+    finally:ownership.__exit__(None,None,None)
+
+
 def controller(invocation):
     value, config = read_invocation(invocation)
     from outer.harness import util
@@ -333,17 +385,29 @@ def controller(invocation):
     identity = identities(); directory = Path(invocation).parent
     with identity.ProcessIdentity(value['supervisor']['pid'], value['supervisor']) as owner:
         if not owner.alive(): raise RuntimeError('Supervisor lost before controller start')
-        util.write_new_json(directory/'controller.json', identity.current_identity())
-        done = threading.Event()
-        thread = threading.Thread(target=watch_owner,args=(owner,
-            Path(config['root'])/'_pipeline-supervisor/dispatch.lock',done,
-            lambda:close_owned(config,value['repo'],directory/'controller-stop','supervisor_lost')),daemon=True)
-        thread.start()
+        record=identity.current_identity()
+        util.write_new_json(directory/'controller.json',record)
+        @contextmanager
+        def owned_scope():
+            from research import live_pilot
+            # Entered strictly inside the pipeline's successfully acquired lock.
+            if not owner.alive():raise RuntimeError('Supervisor lost before ownership publication')
+            util.write_new_json(directory/'controller-owned.json',dict(kind='pipeline_controller_ownership_v1',
+                controller=record,supervisor=value['supervisor'],config=value['config'],
+                invocation=live_pilot.reference(invocation)))
+            done=threading.Event()
+            thread=threading.Thread(target=watch_owner,args=(owner,
+                Path(config['root'])/'_pipeline-supervisor/dispatch.lock',done,
+                lambda:close_owned(config,value['repo'],directory/'controller-stop','supervisor_lost')),daemon=True)
+            thread.start()
+            try:yield
+            finally:
+                done.set();thread.join(STOP_SECONDS+20)
         try:
-            pipeline.run_pipeline(Path(value['repo']), Path(value['config']['path']),attempt_policy=policy)
+            pipeline.run_pipeline(Path(value['repo']),Path(value['config']['path']),
+                                  attempt_policy=policy,owner_scope=owned_scope)
         finally:
             util.write_new_json(directory/'controller-finished.json', identity.current_identity())
-            done.set(); thread.join(STOP_SECONDS+20)
 
 
 def supervise(invocation):
@@ -363,6 +427,12 @@ def supervise(invocation):
             child = subprocess.Popen(command, cwd=value['repo'], env=child_environment(),
                 stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
                 creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+            # Capture creation identity from the actual Popen child before poll
+            # can reap it; a later PID-only registration is not ownership proof.
+            try:process=identity.ProcessIdentity(child.pid)
+            except BaseException:
+                launcher._terminate(child);raise
+            child_record=process.record
             reason = 'controller_nonzero'; cache = []; sample = {'tick': time.monotonic(), 'error': None}
             done = threading.Event()
             def sample_budget():
@@ -384,23 +454,24 @@ def supervise(invocation):
                     done.wait(1)
             thread = threading.Thread(target=sample_budget, daemon=True); thread.start()
             startup_deadline = time.monotonic()+30
-            process = None; lease_seen=False; lease_lost=None; ready_written=False
+            registered=False;owned=False;lease_seen=False;lease_lost=None;ready_written=False
             try:
                 while child.poll() is None:
-                    if (directory/'controller.json').exists() and process is None:
+                    if (directory/'controller.json').exists() and not registered:
                         record = util.read_json(directory/'controller.json')
-                        if record['pid'] != child.pid: raise ValueError('Foreign controller registration')
-                        process = identity.ProcessIdentity(child.pid, record)
+                        if record!=child_record: raise ValueError('Foreign controller registration')
+                        registered=True
+                    if registered and not owned:owned=acquired_ownership(directory,value,child_record)
                     if not ready_written and time.monotonic() >= startup_deadline:
                         reason='controller_registration_timeout'; break
-                    if process is not None and not process.alive(): reason='controller_lost'; break
+                    if not process.alive(): reason='controller_lost'; break
                     lock=Path(config['root'])/'_owner/dispatch.lock'
-                    if lock.exists():
+                    if owned and lock.exists():
                         if lease_held(lock): lease_seen=True; lease_lost=None
                         elif lease_seen and not (directory/'controller-finished.json').exists():
                             if lease_lost is None: lease_lost=time.monotonic()
                             if time.monotonic()-lease_lost >= 1: reason='controller_lease_lost'; break
-                    if process is not None and lease_seen and 'result' in sample and not ready_written:
+                    if owned and lease_seen and 'result' in sample and not ready_written:
                         util.write_new_json(directory/'ready.json', dict(supervisor=value['supervisor'],
                             controller=record, separation=separation, config=value['config'], guard_sources=value['guard_sources']))
                         ready_written=True
@@ -413,18 +484,20 @@ def supervise(invocation):
                     time.sleep(POLL)
                 else:
                     reason = 'completed' if child.returncode == 0 else 'controller_nonzero'
+                owned=acquired_ownership(directory,value,child_record)
+                if reason=='completed' and not owned:reason='controller_never_acquired'
                 if reason == 'completed':
                     rows = owned_rows(config)
                     if not all(stopped(row) for row in rows): reason='terminal_closure_unconfirmed'
                 if reason != 'completed':
-                    closure = close_owned(config, value['repo'], directory/'supervisor-stop', reason, child, cache)
+                    closure = close_registered(config,value,directory,reason,child,child_record,cache)
                 else: closure = dict(owned_closure_confirmed=True)
                 util.write_new_json(directory/'result.json', dict(reason=reason, child_exit_code=child.poll(),
                     at=datetime.now(timezone.utc).isoformat(),closure=closure,
                     last_budget=sample.get('result'), budget_error=sample.get('error')))
                 return 0 if reason == 'completed' else 1
             except BaseException:
-                close_owned(config, value['repo'], directory/'supervisor-exception', 'supervisor_exception', child, cache)
+                close_registered(config,value,directory,'supervisor_exception',child,child_record,cache)
                 raise
             finally:
                 done.set(); thread.join(1)

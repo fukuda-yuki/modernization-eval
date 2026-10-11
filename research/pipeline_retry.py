@@ -13,6 +13,21 @@ from pathlib import Path
 KIND='pipeline_technical_exclusion_v1'
 
 
+def source_inventory(root):
+    """Hash acquisition evidence, excluding only the root's OS ownership lock.
+
+    Windows denies a second handle's read of a byte locked by this process.
+    The lock is still held throughout exclusion; its payload is not Run evidence.
+    """
+    from outer.harness import util
+    root=Path(root);util.reject_links(root);entries={}
+    for path in sorted(root.rglob('*'),key=lambda p:str(p.relative_to(root))):
+        relative=path.relative_to(root).as_posix()
+        if path.is_file() and relative!='controller.lock':
+            entries[relative]=dict(sha256=util.sha256_file(path),bytes=path.stat().st_size)
+    return entries
+
+
 def guard():
     spec=importlib.util.spec_from_file_location('_retry_guard',Path(__file__).with_name('pipeline_guard.py'))
     module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
@@ -102,7 +117,7 @@ def exclude(repo,config_path,record,reason,authorization_reference):
         if any(e['kind']=='accepted' and e['slot']==item['attempt']['slot'] for e in events):
             raise ValueError('An adopted slot cannot be replaced')
         path=root/'_exclusions'/(case['run_instance_id']+'.json')
-        before=util.tree_hashes(source)
+        before=source_inventory(source)
         if path.exists():
             receipt=util.read_json(path)
             if (receipt['source_inventory']!=before or receipt['attempt']!=live.reference(item['path'])
@@ -113,7 +128,7 @@ def exclude(repo,config_path,record,reason,authorization_reference):
             observed,charged,charge=budget_usage(source)
             receipt=dict(kind=KIND,config=live.reference(config_path),attempt=live.reference(item['path']),
                 slot=item['attempt']['slot'],run_id=case['run_id'],run_instance_id=case['run_instance_id'],
-                source_inventory=before,reason=reason,evidence=evidence,
+                source_inventory=before,inventory_excluded_paths=['controller.lock'],reason=reason,evidence=evidence,
                 authorization_reference=authorization_reference,adopted=False,
                 observed_usage=observed,budget_usage=charged,conservative_duration_charge=charge,
                 retry_requires_new_uuid=True,model_calls=0,acquisition_count_increment=0,at=run.now())
@@ -123,7 +138,7 @@ def exclude(repo,config_path,record,reason,authorization_reference):
             util.write_new_json(acquisition,dict(acquired=False,slot=item['attempt']['slot'],attempt=item['attempt']['attempt'],
                 record=str(item['path']),usage=receipt['budget_usage'],runs=pipeline.attempt_runs(source.parent,item['attempt']),
                 reason=reason,fault=None,error=None,at=receipt['at'],exclusion=live.reference(path)))
-        if util.tree_hashes(source)!=before:raise ValueError('Original Run changed during exclusion')
+        if source_inventory(source)!=before:raise ValueError('Original Run changed during exclusion')
         ref=live.reference(path)
         prior=[e for e in events if e['kind']=='attempt_excluded' and e.get('record')==str(item['path'])]
         if prior:
@@ -154,7 +169,8 @@ class Exclusions:
                     or not value.get('authorization_reference') or value.get('adopted') is not False
                     or value.get('retry_requires_new_uuid') is not True
                     or value.get('model_calls')!=0 or value.get('acquisition_count_increment')!=0
-                    or value['source_inventory']!=util.tree_hashes(source)):
+                    or value.get('inventory_excluded_paths')!=['controller.lock']
+                    or value['source_inventory']!=source_inventory(source)):
                 raise ValueError('Unbound or changed technical exclusion')
             # A subsequent accepted replacement is allowed; never exclude it.
             if value['slot'] in accepted:

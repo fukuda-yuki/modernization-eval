@@ -5,6 +5,7 @@ usage, evaluation and archives remain checked; publication/history traversal
 are not acquisition admission conditions. Failed attempts remain immutable.
 """
 from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
+from contextlib import nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
 import argparse
@@ -384,7 +385,7 @@ def pending_acquisition_slots(config, attempts, accepted):
     return pending, held
 
 
-def run_pipeline(repo, config_path, *, attempt_policy=None):
+def run_pipeline(repo, config_path, *, attempt_policy=None, owner_scope=None):
     config = util.read_json(config_path)
     if 'campaign_plan' in config:
         from research.campaign_initialization import verify_config
@@ -396,7 +397,7 @@ def run_pipeline(repo, config_path, *, attempt_policy=None):
         with event_lock:
             pair_execution.append(events_path, dict(kind=kind, **fields))
     event_lock = threading.RLock()
-    with pair_execution.exclusive(root/'_owner'):
+    with pair_execution.exclusive(root/'_owner'), (owner_scope() if owner_scope else nullcontext()):
         live_pilot.verify_pins(repo, config['source_pins'])
         existing = pair_execution.events(events_path)
         accepted = set(config['accepted_slots']) | {e['slot'] for e in existing if e['kind']=='accepted'}

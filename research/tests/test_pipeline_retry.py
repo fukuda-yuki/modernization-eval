@@ -80,6 +80,20 @@ class RetryTests(unittest.TestCase):
         with self.assertRaises(ValueError):retry.Exclusions(self.config_path)
         with self.assertRaises(ValueError):self.exclude()
 
+    def test_exclusion_never_hashes_held_controller_lock_but_keeps_nested_evidence(self):
+        nested=self.source/'workspace/controller.lock';nested.parent.mkdir();nested.write_bytes(b'product evidence')
+        actual=util.sha256_file
+        def hash_file(path):
+            if Path(path)==self.source/'controller.lock':raise PermissionError('Windows locked byte')
+            return actual(path)
+        with patch.object(util,'sha256_file',side_effect=hash_file):
+            ref=self.exclude();policy=retry.Exclusions(self.config_path)
+        receipt=util.read_json(ref['path'])
+        self.assertEqual(receipt['inventory_excluded_paths'],['controller.lock'])
+        self.assertNotIn('controller.lock',receipt['source_inventory'])
+        self.assertIn('workspace/controller.lock',receipt['source_inventory'])
+        self.assertTrue(policy.excluded({'record':str(self.record)}))
+
     def test_completed_quality_or_product_failure_is_not_technical_authority(self):
         self.manifest['end_reason']='completed';util.write_json_atomic(self.source/'manifest.json',self.manifest)
         util.write_new_json(self.record.parent/'pipeline-acquisition.json',dict(acquired=True,reason='evaluation_pending'))

@@ -42,11 +42,18 @@ synthetic acceptance uses a new session; it is not Windows acceptance.
 The invoker may exit after the hash-bound `ready.json` appears. Registration
 records the starter/supervisor/controller identities, the original config
 reference, adapter hashes and separation observation. Readiness requires a
-registered controller, an observed held owner lease and a successful independent
-budget sample. Logs and receipts are under `_supervision/<invocation-uuid>/`.
+registered controller, a bound `controller-owned.json` published strictly after
+that child acquires the campaign lock, an observed held lease and a successful
+independent budget sample. The peer-loss watcher also starts only inside that
+ownership scope and stops before its lock is released. A failed pre-owner launch
+can terminate only its own child; it cannot emit campaign STOP or touch another
+owner's attempts. After an owned child exits, cleanup reacquires the campaign lock
+and leaves a different owner untouched if that acquisition loses a race.
+Logs and receipts are under `_supervision/<invocation-uuid>/`.
 Failure to observe registration does not justify killing an ambiguous process;
-inspect that invocation's logs and result first. Concurrent launches cannot stop
-the legitimate owner or spawn a second controller under its supervisor lock.
+inspect that invocation's logs and result first. Guarded launches are serialized
+by the supervisor lock. A contender for a direct controller's campaign lock gains
+no stop authority until it actually acquires that lock.
 
 Job non-membership plus a synthetic parent/Job-exit test is scoped evidence. It
 does not guarantee arbitrary long uptime, survive a machine outage or stop
@@ -109,6 +116,10 @@ The command acquires the existing pipeline/Run locks, binds the original
 reservation/UUID, checks physical closure, and stores `_exclusions/<uuid>.json`
 and an `attempt_excluded` event. It creates a missing acquisition receipt if
 needed; an existing receipt and every original Run/scoring file remain unchanged.
+The inventory excludes only the Run root's `controller.lock`, explicitly recorded
+as `inventory_excluded_paths`. That OS lock remains held, without reading its
+locked bytes through a second handle. Lock liveness probes likewise use file-size
+metadata and the OS lock operation. Nested files with the same name remain hashed.
 A repeated identical exclusion is idempotent. Original source changes, duplicate
 selection, partial journals, competing owners or conflicting exclusions are held.
 
