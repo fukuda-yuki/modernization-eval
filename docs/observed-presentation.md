@@ -53,8 +53,15 @@ the original accounting scope.
 The new contract also retains the native server's full, unpaginated message
 inventory in the private controller directory. Its hash and session are bound
 in the ledger. It verifies the number, IDs and exact text hashes of external
-user messages, distinguishing native synthetic messages. Missing evidence means
-unknown, never proof of zero sends. The fixed attach CLI can omit JSONL events
+user messages, distinguishing native synthetic messages. Missing or incomplete
+inventories are retained in `observation_issues`; `zero_additional_verified` is
+null (unknown), never proof of zero sends. Independently verified CLI completion,
+first-request containment, request usage and final artifacts remain usable for
+technical adoption. This does not prove an unobserved additional delivery or
+restore missing initial-input/completion evidence. Observed extra user messages,
+foreign identities and altered originals remain errors; a partial inventory can
+prove an observed mismatch even though it cannot prove absence.
+The fixed attach CLI can omit JSONL events
 when a response finishes immediately; completion can instead be proved by native
 `step-finish` parts in that inventory. The proof source is explicit in provenance;
 CLI events are never manufactured. Foreign or contradictory native records are

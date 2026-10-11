@@ -141,6 +141,25 @@ def reconcile(started, ended, run_id, session_id=None):
     return events, sorted(set(issues))
 
 
+def native_message_inventory(controller):
+    """Optional observation, independent of CLI completion/request accounting.
+
+    Absence/read failure and a partial snapshot are unknown observations. A
+    duplicate receipt or changed retained original remains an integrity error.
+    """
+    ledger=controller.events()
+    receipts=[e for e in ledger if e['kind']=='native_message_inventory']
+    if len(receipts)>1:raise ValueError('Duplicate native message inventory receipt')
+    if not receipts:return None,['native_message_inventory_unavailable' if any(
+        e['kind']=='native_message_inventory_unavailable' for e in ledger) else 'native_message_inventory_missing']
+    receipt=receipts[0];path=controller.root/'native-messages.json'
+    try:raw=path.read_bytes()
+    except OSError:return None,['native_message_inventory_unavailable']
+    if util.sha256_bytes(raw)!=receipt['sha256']:raise ValueError('Native message inventory changed')
+    messages=json.loads(raw)
+    return (receipt,messages),([] if receipt.get('client_finished') is True else ['native_message_inventory_incomplete'])
+
+
 def native_completion(root, manifest):
     """Use retained native originals; attach JSONL may miss an immediate idle.
 
@@ -151,7 +170,7 @@ def native_completion(root, manifest):
     root=Path(root);native,errors=journal(root/'evidence/agent.jsonl')
     sessions=sorted({e['sessionID'] for e in native if isinstance(e.get('sessionID'),str)})
     steps=sum(e.get('type')=='step_finish' for e in native)
-    result=dict(sessions=sessions,steps=steps,source='native_cli_jsonl',errors=errors)
+    result=dict(sessions=sessions,steps=steps,source='native_cli_jsonl',errors=errors,observation_issues=[])
     reference=manifest.get('staged_input')
     if not reference:return result
     try:
@@ -159,15 +178,17 @@ def native_completion(root, manifest):
         if util.sha256_file(path)!=reference['contract_sha256']:raise ValueError('Changed native contract')
         controller=staged_input.Controller(path.parent)
         if not staged_input.observed(controller.contract['boundary_contract']):return result
-        ledger=controller.events();receipts=[e for e in ledger if e['kind']=='native_message_inventory']
+        ledger=controller.events()
         bound=[e['native_session_id'] for e in ledger if e['kind']=='native_session']
-        messages_path=controller.root/'native-messages.json'
-        if (len(receipts)!=1 or receipts[0].get('client_finished') is not True or len(bound)!=1
-                or receipts[0].get('native_session_id')!=bound[0]
-                or util.sha256_file(messages_path)!=receipts[0]['sha256']
-                or (sessions and sessions!=bound)):
+        if len(bound)!=1 or (sessions and sessions!=bound):
+            raise ValueError('Native session identity conflicts with controller')
+        inventory,observations=native_message_inventory(controller)
+        result['observation_issues']=observations
+        if inventory is None:return result
+        receipt,messages=inventory
+        if receipt.get('native_session_id')!=bound[0]:
             raise ValueError('Unverified complete native message inventory')
-        messages=util.read_json(messages_path);parts=[];ids=[]
+        parts=[];ids=[]
         for message in messages:
             info=message['info'];ids.append(info['id'])
             if info['sessionID']!=bound[0] or not info['id']:raise ValueError('Foreign native message')
@@ -176,13 +197,14 @@ def native_completion(root, manifest):
                     raise ValueError('Foreign native message part')
                 parts.append(part)
         if len(set(ids))!=len(ids):raise ValueError('Duplicate native message')
+        if receipt.get('client_finished') is not True:return result
         step_parts=[p for p in parts if p['type']=='step-finish']
         step_ids=[p['id'] for p in step_parts]
         if (len(set(step_ids))!=len(step_ids) or not step_ids
                 or any(e.get('part',{}).get('id') not in step_ids for e in native if e.get('type')=='step_finish')):
             raise ValueError('Native completion inventory conflicts with CLI events')
         return dict(sessions=bound,steps=len(step_parts),source='native_message_inventory',errors=errors,
-                    sha256=receipts[0]['sha256'])
+                    sha256=receipt['sha256'],observation_issues=[])
     except (OSError,ValueError,KeyError,TypeError):
         result['errors']=errors+['native_message_inventory_unverified']
         return result
@@ -326,8 +348,9 @@ def staged_evidence(root, manifest, events, native_sessions):
         post=artifacts[staged_input.checkpoint_labels(contract)[2]]
         first_post_resume = None
         native_input_inventory = None
+        observation_issues = []
         if resumption:
-            first_post_resume, native_input_inventory, faults = resumption_evidence(
+            first_post_resume, native_input_inventory, faults, observation_issues = resumption_evidence(
                 controller, ledger, records, barriers, events, sessions, artifacts)
             errors += faults
         if post.get('binding') if resumption else post.get('archive'):
@@ -352,7 +375,10 @@ def staged_evidence(root, manifest, events, native_sessions):
                 native_acknowledged=None if control else value['native_acknowledged'],
                 no_input_by_design=control, resumption_action=action,
                 first_post_resume_request=first_post_resume,native_input_inventory=native_input_inventory,
-                zero_additional_verified=(not errors and native_input_inventory is not None) if control else None)
+                observation_issues=observation_issues,
+                zero_additional_verified=(False if 'stage_native_external_message_mismatch' in errors
+                    else True if native_input_inventory and native_input_inventory['complete'] and not errors
+                    else None) if control else None)
         return value, errors
     except (OSError, ValueError, KeyError, TypeError) as error:
         return {'additional_input_reached': False, 'evidence_error_type': type(error).__name__}, ['stage_evidence_unverified']
@@ -397,13 +423,11 @@ def resumption_evidence(controller, ledger, records, barriers, events, sessions,
         else:
             first={k:matches[0][k] for k in ('request_id','request_sha256','started_at')}
             first['send_evidence']=matches[0].get('send_evidence','unknown')
-    receipts=[e for e in ledger if e['kind']=='native_message_inventory']
-    if len(receipts)!=1 or receipts[0].get('client_finished') is not True:
-        errors.append('stage_native_input_inventory_unknown')
-    else:
-        path=controller.root/'native-messages.json'
-        if util.sha256_file(path)!=receipts[0]['sha256']:raise ValueError('Native message inventory changed')
-        messages=util.read_json(path);users=[];seen=set()
+    observation,observation_issues=native_message_inventory(controller)
+    if observation is not None:
+        receipt,messages=observation;users=[];seen=set()
+        complete=receipt.get('client_finished') is True
+        if receipt.get('native_session_id') not in sessions:errors.append('stage_native_input_inventory_identity')
         for message in messages:
             info=message['info'];parts=message['parts']
             if info['sessionID'] not in sessions or info['id'] in seen:
@@ -416,12 +440,15 @@ def resumption_evidence(controller, ledger, records, barriers, events, sessions,
         expected=[contract['initial_sha256']]
         acks=[e for e in ledger if e['kind']=='acknowledged']
         if not control and acks:expected.append(contract['additional_sha256'])
-        if ([u['sha256'] for u in users]!=expected or any(u['text_parts']!=1 for u in users)
-                or (acks and (len(users)!=2 or users[-1]['native_message_id']!=acks[0]['native_message_id']))):
+        # A partial inventory cannot prove absence, but extra/different observed
+        # user messages are still positive evidence of a condition mismatch.
+        if ([u['sha256'] for u in users]!=(expected if complete else expected[:len(users)])
+                or any(u['text_parts']!=1 for u in users)
+                or (acks and len(users)==2 and users[-1]['native_message_id']!=acks[0]['native_message_id'])):
             errors.append('stage_native_external_message_mismatch')
-        inventory={'sha256':receipts[0]['sha256'],'external_user_messages':users,
+        inventory={'sha256':receipt['sha256'],'external_user_messages':users,'complete':complete,
                    'planned_additional_count':0 if control else 1}
-    return first,inventory,errors
+    return first,inventory,errors,observation_issues
 
 
 def collect(root):
@@ -509,6 +536,8 @@ def collect(root):
         issues.append('native_steps_exceed_gateway_calls')
     stages, stage_issues = staged_evidence(root, manifest, events, native_sessions)
     issues += stage_issues
+    observation_issues=sorted(set(completion.get('observation_issues',[])
+        + (stages or {}).get('observation_issues',[])))
     if stages is not None:
         reached = reached and (not stage_issues if stages.get('presentation_mode') else stages['additional_input_reached'])
         util.write_json_atomic(root/'usage/staged-input-evidence.json', stages)
@@ -522,6 +551,7 @@ def collect(root):
         'native_agent_session_ids': native_sessions,
         'native_step_count': native_steps,
         'native_completion_source':completion['source'],
+        'observation_issues':observation_issues,
         'run_instance_id': manifest.get('run_instance_id'),
         'expected_sessions': [session_id], 'inventory_complete': not issues,
         'inventory_complete_basis': {'issues': sorted(set(issues)), 'started_count': len(starts),
@@ -545,6 +575,7 @@ def collect(root):
     normalized['input_reached'] = reached
     if stages is not None: normalized['staged_input'] = stages
     normalized['inventory_issues'] = sorted(set(issues))
+    normalized['observation_issues'] = observation_issues
     components = [normalized['observed_input_tokens'], normalized['observed_output_tokens']]
     normalized['observed_tokens'] = sum(v for v in components if v is not None) if any(v is not None for v in components) else None
     normalized['observed_call_count'] = len(events)

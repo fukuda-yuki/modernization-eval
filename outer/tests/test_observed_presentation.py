@@ -87,7 +87,10 @@ class PresentationTests(unittest.TestCase):
         controller=self.controller();controller.start();controller.bind_session('native')
         (self.root/'evidence').mkdir();(self.root/'evidence/agent.jsonl').write_text('')
         manifest=dict(staged_input=dict(contract_path=str(controller.root/'contract.json'),contract_sha256=controller.contract_sha256))
-        self.assertIn('native_message_inventory_unverified',live_usage.native_completion(self.root,manifest)['errors'])
+        proof=live_usage.native_completion(self.root,manifest)
+        self.assertEqual(proof['errors'],[])
+        self.assertEqual(proof['observation_issues'],['native_message_inventory_missing'])
+        self.assertEqual(proof['steps'],0)  # Missing CLI and inventory do not prove completion.
 
     def test_full_initial_is_byte_identical_to_explore_without_preload(self):
         repo=Path(__file__).resolve().parents[2]
