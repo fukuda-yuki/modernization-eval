@@ -9,8 +9,12 @@ from datetime import datetime
 import importlib.util
 import json
 from pathlib import Path
+import uuid
 
 KIND='pipeline_technical_exclusion_v1'
+PREPARATION='pre_dispatch_preparation_interrupted_v1'
+EXECUTION_FILES=('runtime.json','implementation-receipt.json','snapshot.json',
+                 'usage/normalized.json','usage/provenance.json','evidence/agent.jsonl')
 
 
 def source_inventory(root):
@@ -89,8 +93,166 @@ def _item(config,record):
     if len(reservations)!=1 or len(found)!=1 or len(found[0]['cases'])!=1:
         raise ValueError('One original reserved single-condition attempt required')
     item=found[0]
-    if reservations[0]['slot']!=item['attempt']['slot']:raise ValueError('Reservation slot mismatch')
+    if (reservations[0]['slot']!=item['attempt']['slot']
+            or reservations[0].get('attempt')!=item['attempt']['attempt']):
+        raise ValueError('Reservation slot/attempt mismatch')
     return item
+
+
+def preparation_state(item,source):
+    """Negative evidence only; an absent Run UUID is never supplied to a manifest."""
+    from research import pair_execution,live_pilot as live
+    from outer.harness import util,live_usage
+    case=item['cases'][0];batch=source.parent;path=source/'manifest.json'
+    campaign_root=Path(item['epoch']['campaign_config']['path']).parent
+    for hold_path in (campaign_root/'_exclusion-holds'/case['run_instance_id']).glob('*.json'):
+        hold=util.read_json(hold_path)
+        if (hold.get('attempt')!=live.reference(item['path'])
+                or hold.get('execution_evidence_seen') is True):
+            raise ValueError('Previously observed execution evidence prevents an unsent exclusion')
+    manifest=util.read_json(path) if path.exists() else {}
+    if any(k in manifest and manifest[k]!=case[k] for k in ('run_id','run_instance_id')):
+        raise ValueError('Preparation manifest identity mismatch')
+    journal=batch/'_control/pair-journal.jsonl';events=pair_execution.events(journal)
+    current=pair_execution.state(journal)
+    if (current['dispatch'] or len(events)>1 or any(e['kind']!='pair_reserved' for e in events)
+            or any(any(b.get(k)!=v for k,v in case.items()) for b in current['reserved'].values())
+            or set(current['reserved']) not in (set(),{case['run_id']})):
+        raise ValueError('Dispatch or ambiguous preparation journal; not proven unsent')
+    staged,errors=live_usage.journal(source/'_controller/staged-input/events.jsonl')
+    if (any(manifest.get(k) is not None for k in ('started_at','ended_at','duration_seconds','native_session_id'))
+            or manifest.get('model_called') not in (None,False)
+            or util.tree_hashes(source/'usage/raw')
+            or any((source/name).exists() for name in EXECUTION_FILES)
+            or any((source/'snapshots').glob('*')) or errors
+            or any(e.get('kind')!='planned' for e in staged)):
+        raise ValueError('Runtime/request or ambiguous execution evidence; not proven unsent')
+    invocation=batch/'pair-invocation.json'
+    if invocation.exists():
+        value=util.read_json(invocation)
+        if (value.get('owner_plan')!=item['attempt']['epoch']
+                or value.get('observer_phase')!=item['attempt']['phase']):
+            raise ValueError('Foreign preparation invocation')
+    elif source.exists() or events:
+        raise ValueError('Materialized preparation lacks its owner invocation')
+    refs={str(p):live.reference(p) for p in (journal,invocation) if p.exists()}
+    return dict(manifest_present=path.exists(),manifest_uuid_present='run_instance_id' in manifest,
+        measured_duration_seconds=manifest.get('duration_seconds'),references=refs,
+        invocation_present=invocation.exists())
+
+
+def observe_preparation(config,item,source):
+    """Called under all owner locks. Reuse the existing observer close checker."""
+    from research import campaign_launcher,live_pilot as live
+    from outer.harness import util,runtime,run
+    state=preparation_state(item,source);stop=Path(config['root'])/'STOP'
+    if not stop.is_file():raise ValueError('Retained campaign STOP required for preparation exclusion')
+    observers=campaign_launcher.close_observers(dict(epoch=item['epoch'],epoch_plan=item['attempt']['epoch'],
+        pairs=[item['attempt']['slot']]))
+    rows=observers.get('observers',[])
+    if any(r.get('shutdown',{}).get('dispatched') for r in rows):
+        error=ValueError('Observer retains dispatched execution; not proven unsent')
+        error.execution_evidence_seen=True
+        raise error
+    if (observers.get('confirmed') is not True or (state['invocation_present'] and len(rows)!=1)
+            or any(r.get('confirmed') is not True or r.get('shutdown_ack_confirmed') is not True
+                or r.get('process_exit_verified') is not True
+                or r.get('shutdown',{}).get('phase_sha256')!=item['attempt']['phase']['sha256']
+                or r.get('shutdown',{}).get('dispatched')!=[] for r in rows)):
+        raise ValueError('Undispatched observer ACK/exit unconfirmed')
+    references=dict(state['references'])
+    for row in rows:
+        directory=live.safe_path(row['directory'])
+        if directory.parent!=Path(item['epoch']['batch'])/'_observers':
+            raise ValueError('Foreign preparation observer directory')
+        for pattern in ('config.json','startup-ready.json','shutdown.json','shutdown-ack.json',
+                        'scope-*.json'):
+            paths=list(directory.glob(pattern))
+            if not paths:raise ValueError('Observer closure evidence disappeared')
+            for path in paths:references[str(path)]=live.reference(path)
+    resources=[]
+    for kind,args in (('containers',('ps','-a')),('networks',('network','ls'))):
+        result=runtime.docker(*args,'--filter','label=sample2.instance='+item['cases'][0]['run_instance_id'],
+            '--format','{{.ID}}',check=False,timeout=20)
+        if result.returncode or result.stdout.strip():
+            raise ValueError('Owned resource absence unconfirmed: '+kind)
+        resources.append(dict(kind=kind,observed_ids=[],returncode=0))
+    if preparation_state(item,source)!=state:raise ValueError('Preparation changed during closure observation')
+    return dict(kind=PREPARATION,cause='unknown',interruption_stage='pre_dispatch_preparation',state=state,
+        references=references,observer_closure=observers,owned_resources=resources,
+        stop_sha256=util.sha256_file(stop),observed_at=run.now(),model_dispatch_proven_absent=True)
+
+
+def preparation_usage(item,source,evidence):
+    """Revalidate the sealed negative evidence without replaying physical probes."""
+    from research import live_pilot as live,acquisition_pipeline as pipeline
+    if (evidence.get('kind')!=PREPARATION or evidence.get('model_dispatch_proven_absent') is not True
+            or evidence.get('state')!=preparation_state(item,source)
+            or evidence.get('observer_closure',{}).get('confirmed') is not True
+            or evidence.get('owned_resources')!=[dict(kind=k,observed_ids=[],returncode=0)
+                for k in ('containers','networks')] or not evidence.get('stop_sha256')):
+        raise ValueError('Changed or unconfirmed preparation exclusion')
+    for ref in evidence['references'].values():live.checked(ref)
+    # Zero counts are justified by the bound no-dispatch/closure proof. The
+    # original absent/null measured duration is retained separately in state.
+    observed=pipeline.usage_for_manifests([])
+    return observed,json.loads(json.dumps(observed)),None
+
+
+def preparation_exclusion(config,item):
+    """Small read-only guard path for a sealed, originally incomplete Run."""
+    from research import live_pilot as live,pair_execution
+    from outer.harness import util
+    if len(item['cases'])!=1:return None
+    journal=pair_execution.events(Path(config['root'])/'events.jsonl')
+    events=[e for e in journal
+        if e['kind']=='attempt_excluded' and e.get('record')==str(item['path'])]
+    if not events:return None
+    if len(events)!=1:raise ValueError('Duplicate exclusion event')
+    path=live.checked(events[0]['exclusion']);value=util.read_json(path)
+    if value.get('evidence',{}).get('kind')!=PREPARATION:return None
+    case=item['cases'][0]
+    reservations=[e for e in journal if e['kind']=='reserved' and e.get('record')==str(item['path'])]
+    if (path!=Path(config['root'])/'_exclusions'/(case['run_instance_id']+'.json')
+            or len(reservations)!=1 or reservations[0].get('slot')!=item['attempt']['slot']
+            or reservations[0].get('attempt')!=item['attempt']['attempt']
+            or value.get('kind')!=KIND or value.get('config')!=live.reference(Path(config['root'])/'config.json')
+            or value.get('attempt')!=live.reference(item['path'])
+            or any(value.get(k)!=case[k] for k in ('run_id','run_instance_id'))
+            or value.get('slot')!=item['attempt']['slot'] or events[0]['slot']!=value['slot']
+            or value.get('reason')!='controller_interrupted' or value.get('adopted') is not False
+            or value.get('retry_requires_new_uuid') is not True or not value.get('authorization_reference')
+            or value.get('model_calls')!=0 or value.get('acquisition_count_increment')!=0):
+        raise ValueError('Unbound preparation exclusion')
+    observed,charged,charge=preparation_usage(item,item['path'].parent/case['run_id'],value['evidence'])
+    if (value.get('observed_usage')!=observed or value.get('budget_usage')!=charged
+            or value.get('conservative_duration_charge')!=charge):raise ValueError('Excluded preparation usage changed')
+    return value
+
+
+def record_preparation_hold(config,item,source,error,authorization_reference):
+    """A refusal retains known raw components and unknowns; it authorizes nothing."""
+    from research import live_pilot as live
+    from outer.harness import live_usage,util,run
+    starts,start_errors=live_usage.journal(source/'usage/raw/started.jsonl')
+    rows,row_errors=live_usage.journal(source/'usage/raw/events.jsonl')
+    components=[v for row in rows for k in ('input_tokens','output_tokens')
+        if isinstance(row.get('usage'),dict) and type(v:=row['usage'].get(k)) is int and v>=0]
+    ids=[row.get('request_id') for row in rows]
+    distinct=all(isinstance(i,str) and i for i in ids) and len(set(ids))==len(ids)
+    raw=util.tree_hashes(source/'usage/raw')
+    journal,_=live_usage.journal(source.parent/'_control/pair-journal.jsonl')
+    path=Path(config['root'])/'_exclusion-holds'/item['cases'][0]['run_instance_id']/(uuid.uuid4().hex+'.json')
+    util.write_new_json(path,dict(kind='pipeline_preparation_exclusion_held_v1',attempt=live.reference(item['path']),
+        reason=type(error).__name__+': '+str(error),authorization_reference=authorization_reference,
+        known_usage=dict(request_start_records=len(starts) if starts else None,
+            observed_tokens_lower_bound=sum(components) if components and distinct and not row_errors else None,
+            observed_token_components=components,
+            totals_unknown=True,journal_errors=start_errors+row_errors),
+        raw_usage=raw,execution_evidence_seen=bool(raw or any((source/name).exists() for name in EXECUTION_FILES)
+            or any(row.get('kind')=='dispatch' for row in journal)
+            or getattr(error,'execution_evidence_seen',False)),
+        adopted=False,retry_authorized=False,at=run.now()))
 
 
 def exclude(repo,config_path,record,reason,authorization_reference):
@@ -104,48 +266,66 @@ def exclude(repo,config_path,record,reason,authorization_reference):
     if config['template'].get('staged_retry',{}).get('retry_budget')!='shared_reserved_attempts':
         raise ValueError('This narrow exclusion path requires the existing shared-attempt budget')
     root=Path(config['root']);item=_item(config,record);case=item['cases'][0];source=item['path'].parent/case['run_id']
-    with ExitStack() as stack:
-        for path in (root/'_pipeline-supervisor/dispatch.lock',root/'_owner/dispatch.lock',source/'controller.lock'):
-            if path.exists():stack.enter_context(_existing_lock(path))
-            elif path.name=='controller.lock':raise ValueError('Original Run ownership lock missing')
-        profiles.validate_run(source)
-        manifest=util.read_json(source/'manifest.json')
-        if any(manifest.get(k)!=case[k] for k in ('run_id','run_instance_id')):raise ValueError('Run identity mismatch')
-        row=dict(root=str(source),allocated=True,**{k:case[k] for k in ('run_id','run_instance_id')})
-        if not owner.stopped(row):raise ValueError('Physical stop and network cleanup required')
-        events=pair_execution.events(root/'events.jsonl')
-        if any(e['kind']=='accepted' and e['slot']==item['attempt']['slot'] for e in events):
-            raise ValueError('An adopted slot cannot be replaced')
-        path=root/'_exclusions'/(case['run_instance_id']+'.json')
-        before=source_inventory(source)
-        if path.exists():
-            receipt=util.read_json(path)
-            if (receipt['source_inventory']!=before or receipt['attempt']!=live.reference(item['path'])
-                    or receipt['reason']!=reason or receipt['authorization_reference']!=authorization_reference):
-                raise ValueError('Existing exclusion changed; reconcile without dispatch')
-        else:
-            evidence=technical_reason(item,source,reason)
-            observed,charged,charge=budget_usage(source)
-            receipt=dict(kind=KIND,config=live.reference(config_path),attempt=live.reference(item['path']),
-                slot=item['attempt']['slot'],run_id=case['run_id'],run_instance_id=case['run_instance_id'],
-                source_inventory=before,inventory_excluded_paths=['controller.lock'],reason=reason,evidence=evidence,
-                authorization_reference=authorization_reference,adopted=False,
-                observed_usage=observed,budget_usage=charged,conservative_duration_charge=charge,
-                retry_requires_new_uuid=True,model_calls=0,acquisition_count_increment=0,at=run.now())
-            util.write_new_json(path,receipt)
-        acquisition=source.parent/'pipeline-acquisition.json'
-        if not acquisition.exists():
-            util.write_new_json(acquisition,dict(acquired=False,slot=item['attempt']['slot'],attempt=item['attempt']['attempt'],
-                record=str(item['path']),usage=receipt['budget_usage'],runs=pipeline.attempt_runs(source.parent,item['attempt']),
-                reason=reason,fault=None,error=None,at=receipt['at'],exclusion=live.reference(path)))
-        if source_inventory(source)!=before:raise ValueError('Original Run changed during exclusion')
-        ref=live.reference(path)
-        prior=[e for e in events if e['kind']=='attempt_excluded' and e.get('record')==str(item['path'])]
-        if prior:
-            if len(prior)!=1 or prior[0]['exclusion']!=ref:raise ValueError('Conflicting exclusion event')
-        else:pair_execution.append(root/'events.jsonl',dict(kind='attempt_excluded',slot=receipt['slot'],
-            record=str(item['path']),exclusion=ref,acquisition_count_increment=0,model_calls=0))
-        return ref
+    manifest_path=source/'manifest.json'
+    preparation=reason=='controller_interrupted'
+    try:
+        if preparation and manifest_path.exists():preparation=not util.read_json(manifest_path).get('started_at')
+        with ExitStack() as stack:
+            for control in (root/'_pipeline-supervisor',root/'_owner'):
+                if (control/'dispatch.lock').exists():
+                    stack.enter_context(_existing_lock(control/'dispatch.lock'))
+                elif preparation:stack.enter_context(pair_execution.exclusive(control))
+            if preparation:stack.enter_context(pair_execution.exclusive(source.parent/'_control'))
+            if (source/'controller.lock').exists():stack.enter_context(_existing_lock(source/'controller.lock'))
+            elif not preparation:raise ValueError('Original Run ownership lock missing')
+            if not preparation:
+                profiles.validate_run(source)
+                manifest=util.read_json(manifest_path)
+                if any(manifest.get(k)!=case[k] for k in ('run_id','run_instance_id')):raise ValueError('Run identity mismatch')
+                row=dict(root=str(source),allocated=True,**{k:case[k] for k in ('run_id','run_instance_id')})
+                if not owner.stopped(row):raise ValueError('Physical stop and network cleanup required')
+            events=pair_execution.events(root/'events.jsonl')
+            if any(e['kind']=='accepted' and e['slot']==item['attempt']['slot'] for e in events):
+                raise ValueError('An adopted slot cannot be replaced')
+            path=root/'_exclusions'/(case['run_instance_id']+'.json')
+            before=source_inventory(source)
+            if path.exists():
+                receipt=util.read_json(path)
+                if (receipt['source_inventory']!=before or receipt['attempt']!=live.reference(item['path'])
+                        or receipt['reason']!=reason or receipt['authorization_reference']!=authorization_reference):
+                    raise ValueError('Existing exclusion changed; reconcile without dispatch')
+                if preparation:preparation_usage(item,source,receipt['evidence'])
+            else:
+                evidence=observe_preparation(config,item,source) if preparation else technical_reason(item,source,reason)
+                observed,charged,charge=(preparation_usage(item,source,evidence) if preparation else budget_usage(source))
+                acquisition=source.parent/'pipeline-acquisition.json'
+                if preparation and acquisition.exists():
+                    saved=util.read_json(acquisition)
+                    if saved.get('acquired') is not False or saved.get('usage')!=observed:
+                        raise ValueError('Existing acquisition is not an unsent preparation')
+                receipt=dict(kind=KIND,config=live.reference(config_path),attempt=live.reference(item['path']),
+                    slot=item['attempt']['slot'],run_id=case['run_id'],run_instance_id=case['run_instance_id'],
+                    source_inventory=before,inventory_excluded_paths=['controller.lock'],reason=reason,evidence=evidence,
+                    authorization_reference=authorization_reference,adopted=False,
+                    observed_usage=observed,budget_usage=charged,conservative_duration_charge=charge,
+                    retry_requires_new_uuid=True,model_calls=0,acquisition_count_increment=0,at=run.now())
+                util.write_new_json(path,receipt)
+            acquisition=source.parent/'pipeline-acquisition.json'
+            if not acquisition.exists():
+                util.write_new_json(acquisition,dict(acquired=False,slot=item['attempt']['slot'],attempt=item['attempt']['attempt'],
+                    record=str(item['path']),usage=receipt['budget_usage'],runs=pipeline.attempt_runs(source.parent,item['attempt']),
+                    reason=reason,fault=None,error=None,at=receipt['at'],exclusion=live.reference(path)))
+            if source_inventory(source)!=before:raise ValueError('Original Run changed during exclusion')
+            ref=live.reference(path)
+            prior=[e for e in events if e['kind']=='attempt_excluded' and e.get('record')==str(item['path'])]
+            if prior:
+                if len(prior)!=1 or prior[0]['exclusion']!=ref:raise ValueError('Conflicting exclusion event')
+            else:pair_execution.append(root/'events.jsonl',dict(kind='attempt_excluded',slot=receipt['slot'],
+                record=str(item['path']),exclusion=ref,acquisition_count_increment=0,model_calls=0))
+            return ref
+    except Exception as exc:
+        if preparation:record_preparation_hold(config,item,source,exc,authorization_reference)
+        raise
 
 
 class Exclusions:
@@ -178,10 +358,15 @@ class Exclusions:
                 for selected in chosen:
                     ref=selected.get('record',{})
                     if Path(ref.get('path','')).parent==record.parent:raise ValueError('Excluded attempt was adopted')
-            observed,charged,charge=budget_usage(source)
+            preparation=value.get('evidence',{}).get('kind')==PREPARATION
+            if preparation:
+                if preparation_exclusion(config,item)!=value:raise ValueError('Preparation exclusion differs')
+                observed,charged,charge=preparation_usage(item,source,value['evidence'])
+            else:observed,charged,charge=budget_usage(source)
             if (value['observed_usage']!=observed or value['budget_usage']!=charged
                     or value['conservative_duration_charge']!=charge):raise ValueError('Excluded usage changed')
-            if technical_reason(item,source,value['reason'])!=value['evidence']:raise ValueError('Technical evidence changed')
+            if not preparation and technical_reason(item,source,value['reason'])!=value['evidence']:
+                raise ValueError('Technical evidence changed')
             self.rows[str(record)]=value
 
     def excluded(self,attempt):return str(Path(attempt['record'])) in self.rows

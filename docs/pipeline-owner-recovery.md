@@ -92,10 +92,9 @@ dispatch evidence remain faults; the last successful budget observation remains
 in the supervisor result. There is no preparation-specific budget reset.
 
 Historical incomplete attempts without this owner evidence are not retroactively
-declared to be preparing. Keep their original reservations, STOP and files; they
-must be reconciled before restart. The existing technical-exclusion command still
-requires a valid complete Run and confirmed physical closure. It does not seal an
-interruption inside profile creation or manufacture the missing UUID/receipts.
+declared to be preparing. The existing exclusion command can instead seal their
+confirmed pre-dispatch interruption as described below. It never manufactures a
+manifest UUID, completes profile creation, or retrofits preparation receipts.
 
 On a fault the guard publishes pipeline STOP first, then the exact phase/Run stop
 markers. Bounded stop helpers call the ordinary `stop_owned` (gateway admission
@@ -144,6 +143,33 @@ metadata and the OS lock operation. Nested files with the same name remain hashe
 A repeated identical exclusion is idempotent. Original source changes, duplicate
 selection, partial journals, competing owners or conflicting exclusions are held.
 
+The same `--reason controller_interrupted` command has a preparation-only branch
+for a partial or absent manifest and a Run which never dispatched. Its identity
+comes from the unique reservation event, attempt and hash-bound fixed phase.
+Under the supervisor, campaign and pair locks (and the Run lock if present), it
+requires the retained campaign STOP and checks for any dispatch, runtime, raw
+request, native/staged-send or completed-implementation evidence. Such evidence
+or an ambiguous journal prevents an unsent classification. A missing Run directory
+or `controller.lock` does not itself prevent closing an unstarted reservation.
+
+For an entered pair scope, the existing observer closer must confirm the exact
+phase's startup/scope/shutdown bindings, an empty dispatched set, ACK and process
+exit. A reservation that never entered its pair scope can have no observer or Run.
+Docker must successfully report no containers or networks bearing the planned
+instance UUID; even a stopped allocated resource prevents the unsent classification.
+The exclusion seals those observations and their evidence references outside the
+original Run. Only that complete proof permits zero dispatched/request/token
+counts; absent/null measured duration stays absent/null. Repeated exclusion is
+idempotent. The controller and guard validate the sealed preparation exclusion,
+so the original incomplete manifest no longer blocks ordinary new-UUID selection.
+
+A refused preparation exclusion appends `_exclusion-holds/<uuid>/<receipt>.json`
+with its reason, raw evidence hashes, known token components and unknown totals.
+It writes no successful exclusion/acquisition receipt and authorizes no retry.
+Previously observed execution in those holds cannot become an unsent zero-cost
+attempt merely because later evidence disappeared. Genuine dispatched attempts
+continue to use the existing complete-Run technical-exclusion requirements.
+
 The receipt retains factual failure evidence, all observed usage, missing request
 terminals and unknown totals. Controller disappearance with no proven cause is
 recorded as `cause=unknown`, not a model/provider failure. Measured null durations
@@ -164,6 +190,10 @@ for ordinary adoption; quality never controls technical retry.
 This command does not remove STOP, launch a model, or approve scientific execution.
 Actual model restart remains a separate PC operation after runtime acceptance and
 reconciliation. It does not imply that a passed synthetic test is live acceptance.
+The execution PC must seal each interrupted reservation before its existing
+authorized resume procedure, retaining the original STOP bytes as evidence.
+All original reservations still consume the same ceiling (including a ceiling of
+150); exclusion never refunds attempts or resets prior costs or the time origin.
 
 ## Providerless validation
 
@@ -196,3 +226,13 @@ preparation, dispatch and completion. A mixed two-ready/two-preparing case and
 post-dispatch manifest loss/identity mismatch exercise the same composed path.
 This is providerless control-stack coverage, not a real observer/Docker or model
 acceptance claim; those PC checks remain separate for every changed adapter head.
+
+The preparation retry composition additionally interrupts two prepared and two
+UUID-less lanes before any request, uses the real exclusion API, and resumes the
+same slots with four new UUIDs against a local artificial HTTP provider. It checks
+original-byte preservation, retained STOP, zero requests before exclusion, one
+request per replacement, cumulative prior usage and the unchanged ceiling. A
+second case exhausts 150 reservations and refuses replacement requests despite
+successful exclusions. Observer/Docker observations in this composition are
+explicit synthetic boundaries; the separate real Docker fixture and execution-PC
+observer acceptance cover those physical interfaces.

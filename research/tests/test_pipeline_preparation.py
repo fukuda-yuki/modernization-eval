@@ -6,10 +6,13 @@ and create_run real; only pinned-material/resource/model/evaluator boundaries
 use synthetic fixtures. It exercises startup, not merely controller death.
 """
 from contextlib import ExitStack
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import json
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from types import SimpleNamespace
 import unittest
@@ -155,8 +158,16 @@ def synthetic_controller(invocation):
         manifest = run.load_manifest(batch, rid); manifest['started_at'] = run.now()
         run.save_manifest(batch, rid, manifest)
         util.append_line(batch/rid/'usage/raw/started.jsonl', dict(request_id='synthetic'))
+        usage=dict(input_tokens=4, output_tokens=1)
+        if config.get('fixture_provider_url'):
+            from urllib.request import Request,urlopen
+            payload=dict(run_id=rid,run_instance_id=manifest['run_instance_id'],
+                         assignment=manifest['assignment'])
+            with urlopen(Request(config['fixture_provider_url'],data=json.dumps(payload).encode(),
+                    headers={'Content-Type':'application/json'}),timeout=5) as response:
+                usage=json.load(response)['usage']
         util.append_line(batch/rid/'usage/raw/events.jsonl', dict(request_id='synthetic',
-            usage=dict(input_tokens=4, output_tokens=1)))
+            usage=usage))
         wait_marker(root/'finish-workers')
         manifest.update(ended_at=run.now(), duration_seconds=.01, stop_confirmed=True,
             network_cleanup=dict(confirmed=True))
@@ -219,17 +230,37 @@ class PipelineGuardCompositionTests(unittest.TestCase):
     def test_completed_identity_mismatch_stops_guard(self):
         self.compose(fault='change_identity')
 
-    def compose(self, *, mixed=False, fault=None):
+    def test_four_interrupted_preparations_exclude_and_resume_same_slots_with_new_uuids(self):
+        self.compose(mixed=True,recover=True)
+
+    def test_excluded_preparations_do_not_refund_the_shared_150_attempt_ceiling(self):
+        self.compose(mixed=True,recover=True,exhausted=True)
+
+    def compose(self, *, mixed=False, fault=None,recover=False,exhausted=False):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)/'campaign'; directory = Path(tmp)/'supervisor'; directory.mkdir()
             browser = Path(tmp)/'browser.json'; util.write_new_json(browser, {})
             assignments = [dict(pair=n, cases=[dict(pair=n, slot=1, task='toy'+str(n),
                 condition='explore', attempt=1, run_id=run.run_id_for('toy'+str(n), 'explore', 1))])
                 for n in range(1, 5)]
+            provider_requests=[]
+            class Provider(BaseHTTPRequestHandler):
+                def do_POST(self):
+                    provider_requests.append(json.loads(self.rfile.read(int(self.headers['Content-Length']))))
+                    body=json.dumps(dict(usage=dict(input_tokens=4,output_tokens=1))).encode()
+                    self.send_response(200);self.end_headers();self.wfile.write(body)
+                def log_message(self,*args):pass
+            server=ThreadingHTTPServer(('127.0.0.1',0),Provider) if recover else None
+            if server:
+                thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
+                def stop_provider():server.shutdown();server.server_close();thread.join(3)
+                self.addCleanup(stop_provider)
             config = dict(root=str(root), pipeline_id='synthetic', campaign_plan={}, source_pins={},
                 source_commit='a'*40, started_at=run.now(), accepted_slots=[], attempted_slots=[],
-                pair_count=4, reserved_pair_attempts=0, policy=dict(active_model_pairs=4),
+                pair_count=4, reserved_pair_attempts=(146 if exhausted else 142) if recover else 0,
+                policy=dict(active_model_pairs=4),
                 fixture_mixed_preparation=mixed,
+                fixture_provider_url=('http://127.0.0.1:'+str(server.server_port)) if server else None,
                 usage=dict(requests=2, observed_tokens=7, accumulated_run_seconds=0,
                     dispatched_runs=1, unknown_usage_requests=[dict(request_id='prior', observed_tokens=None)]),
                 bounds=dict(request_count=100, observed_tokens=1000, accumulated_run_seconds=1000,
@@ -241,6 +272,7 @@ class PipelineGuardCompositionTests(unittest.TestCase):
             util.write_new_json(root/'config.json', config)
             value = dict(repo=str(REPO), config=live_pilot.reference(root/'config.json'), guard_sources={})
             real_popen = subprocess.Popen; snapshots = []; prepare_samples = 0; fault_written = False
+            interrupted=False
             actual_snapshot = guard.budget_snapshot
 
             def child(command, **kwargs):
@@ -248,12 +280,16 @@ class PipelineGuardCompositionTests(unittest.TestCase):
                     '_controller', command[6]], **kwargs)
 
             def observe(config, previous=None):
-                nonlocal prepare_samples, fault_written
+                nonlocal prepare_samples, fault_written,interrupted
                 snapshot = actual_snapshot(config, previous); snapshots.append(snapshot)
-                rows = list(snapshot['run_observations'].values())
+                rows = [r for r in snapshot['run_observations'].values() if r['state']!='excluded_pre_dispatch']
                 if len(rows) == 4 and sum(r['state'] == 'preparing' for r in rows) == (2 if mixed else 4):
                     prepare_samples += 1
-                    if prepare_samples >= 3: (root/'finish-preparation').touch()
+                    if prepare_samples >= 3:
+                        if recover and not interrupted:
+                            guard.latch(config,directory/'fixture-stop','synthetic_prepare_stop',guard.owned_rows(config))
+                            interrupted=True
+                        elif not recover:(root/'finish-preparation').touch()
                 if len(rows) == 4 and all(r['prepared_receipt'] for r in rows): (root/'allow-dispatch').touch()
                 if snapshot['usage']['requests'] == 6 and not fault_written:
                     if fault:
@@ -274,6 +310,55 @@ class PipelineGuardCompositionTests(unittest.TestCase):
                  patch.object(guard, 'budget_snapshot', side_effect=observe), \
                  patch.object(guard, 'close_owned', return_value={'owned_closure_confirmed':False}) as close:
                 status = guard.supervise(directory/'invocation.json')
+                if recover:
+                    from test_pipeline_preparation_retry import synthetic_observer_closure
+                    from research import pipeline_retry as retry,campaign_launcher
+                    from outer.harness import runtime
+                    self.assertEqual(status,1);self.assertTrue(interrupted)
+                    self.assertEqual(provider_requests,[])
+                    original=guard.attempts(config);self.assertEqual(len(original),4)
+                    before={str(i['path']):util.tree_hashes(i['path'].parent/i['cases'][0]['run_id']) for i in original}
+                    stop=(root/'STOP').read_bytes()
+                    self.assertEqual(sum('run_instance_id' not in util.read_json(i['path'].parent/i['cases'][0]['run_id']/'manifest.json')
+                                         for i in original),2)
+                    with patch.object(retry,'guard',return_value=guard), \
+                         patch.object(guard,'context',return_value=config), \
+                         patch.object(campaign_launcher,'close_observers',side_effect=synthetic_observer_closure), \
+                         patch.object(runtime,'docker',return_value=SimpleNamespace(returncode=0,stdout='')):
+                        for item in original:
+                            ref=retry.exclude(REPO,root/'config.json',item['path'],'controller_interrupted','synthetic-authorized-retry')
+                            self.assertEqual(retry.exclude(REPO,root/'config.json',item['path'],
+                                'controller_interrupted','synthetic-authorized-retry'),ref)
+                    self.assertEqual((root/'STOP').read_bytes(),stop)
+                    self.assertEqual(len(retry.Exclusions(root/'config.json').rows),4)
+                    (root/'STOP').rename(root/'retained-preparation-STOP')
+                    self.assertEqual((root/'retained-preparation-STOP').read_bytes(),stop)
+                    directory=Path(tmp)/'resumed-supervisor';directory.mkdir()
+                    (root/'finish-preparation').touch()
+                    status=guard.supervise(directory/'invocation.json')
+                    if exhausted:
+                        self.assertEqual(status,1)
+                        self.assertIn('Attempt budget exhausted',(directory/'controller.log').read_text())
+                        self.assertEqual(provider_requests,[])
+                        self.assertEqual(len(guard.attempts(config)),4)
+                    else:
+                        self.assertEqual(status,0,(directory/'controller.log').read_text())
+                        self.assertEqual(len(provider_requests),4)
+                        new=[i for i in guard.attempts(config) if str(i['path']) not in before]
+                        self.assertEqual(len(new),4)
+                        old_by_slot={i['attempt']['slot']:i['cases'][0] for i in original}
+                        for item in new:
+                            old=old_by_slot[item['attempt']['slot']];fresh=item['cases'][0]
+                            self.assertNotEqual(fresh['run_instance_id'],old['run_instance_id'])
+                            self.assertEqual({k:v for k,v in fresh.items() if k!='run_instance_id'},
+                                             {k:v for k,v in old.items() if k!='run_instance_id'})
+                        self.assertEqual({r['run_instance_id'] for r in provider_requests},
+                                         {i['cases'][0]['run_instance_id'] for i in new})
+                    for item in original:
+                        self.assertEqual(util.tree_hashes(item['path'].parent/item['cases'][0]['run_id']),before[str(item['path'])])
+                    self.assertEqual(config['reserved_pair_attempts']+len(guard.attempts(config)),150)
+                    self.assertEqual(util.read_json(root/'config.json'),config)
+                    if exhausted:return
             result = util.read_json(directory/'result.json')
             if fault:
                 self.assertEqual(status, 1); close.assert_called_once()
@@ -285,12 +370,14 @@ class PipelineGuardCompositionTests(unittest.TestCase):
                 return
             self.assertEqual(status, 0, (result, (directory/'controller.log').read_text(),
                 [util.read_json(p) for p in root.glob('epochs/*/data/pair-*/pipeline-acquisition.json')]))
-            close.assert_not_called(); self.assertGreaterEqual(prepare_samples, 3)
+            if recover:self.assertEqual(close.call_count,1)
+            else:close.assert_not_called()
+            self.assertGreaterEqual(prepare_samples, 3)
             self.assertFalse((root/'STOP').exists())
-            self.assertTrue(any(len(s['run_observations']) == 4 and
-                all(r['state'] == 'dispatched' for r in s['run_observations'].values()) for s in snapshots))
+            active=[[r for r in s['run_observations'].values() if r['state']!='excluded_pre_dispatch'] for s in snapshots]
+            self.assertTrue(any(len(rows)==4 and all(r['state']=='dispatched' for r in rows) for rows in active))
             events = pair_execution.events(root/'events.jsonl')
-            self.assertEqual(len([e for e in events if e['kind'] == 'reserved']), 4)
+            self.assertEqual(len([e for e in events if e['kind'] == 'reserved']), 8 if recover else 4)
             self.assertEqual(len([e for e in events if e['kind'] == 'accepted']), 4)
             self.assertEqual(events[-1]['usage']['requests'], 6)
             self.assertEqual(events[-1]['usage']['observed_tokens'], 27)

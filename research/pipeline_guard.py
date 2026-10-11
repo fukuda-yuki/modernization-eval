@@ -29,6 +29,11 @@ def identities():
     return module
 
 
+def adapter(name):
+    spec=importlib.util.spec_from_file_location('_guard_'+name,Path(__file__).with_name(name+'.py'))
+    module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module);return module
+
+
 def dependencies(repo):
     repo = Path(repo).resolve()
     sys.path.insert(0, str(repo))
@@ -110,7 +115,19 @@ def budget_snapshot(config, previous=None):
     budget = pipeline.Budget(config); charges = []; observations = {}
     previous_usage = (previous or {}).get('usage', {})
     previous = (previous or {}).get('run_observations', {})
+    retry=adapter('pipeline_retry')
     for item in attempts(config):
+        excluded=retry.preparation_exclusion(config,item)
+        if excluded is not None:
+            case=item['cases'][0];identity=case['run_instance_id'];prior=previous.get(identity,{})
+            if prior.get('dispatched') or prior.get('runtime_present') or any(prior.get('raw_bytes',{}).values()):
+                raise ValueError('Previously observed execution cannot become an unsent exclusion')
+            budget.finish(str(item['path']),excluded['budget_usage'])
+            observations[identity]=dict(run_id=case['run_id'],state='excluded_pre_dispatch',
+                identity_complete=excluded['evidence']['state']['manifest_uuid_present'],
+                dispatched=False,runtime_present=False,raw_bytes={},usage_pending=False,
+                measured_duration_seconds=excluded['evidence']['state']['measured_duration_seconds'])
+            continue
         batch = item['path'].parent
         journal = batch/'_control/pair-journal.jsonl'
         current = pair_execution.state(journal)
@@ -457,10 +474,7 @@ def controller(invocation):
     from outer.harness import util
     # The explicit outer control adapter is hash-bound separately. All original
     # runtime/evaluator/helper imports and --repo remain the frozen checkout.
-    def load(name):
-        spec=importlib.util.spec_from_file_location('_guard_'+name,Path(__file__).with_name(name+'.py'))
-        module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module);return module
-    pipeline=load('acquisition_pipeline');policy=load('pipeline_retry').Exclusions(value['config']['path'])
+    pipeline=adapter('acquisition_pipeline');policy=adapter('pipeline_retry').Exclusions(value['config']['path'])
     identity = identities(); directory = Path(invocation).parent
     with identity.ProcessIdentity(value['supervisor']['pid'], value['supervisor']) as owner:
         if not owner.alive(): raise RuntimeError('Supervisor lost before controller start')
