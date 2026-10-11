@@ -8,6 +8,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -308,7 +309,27 @@ def stop_run(runs_dir, run_id, method, evidence_text=None, end_reason=None):
     return manifest
 
 
-def collect_run(runs_dir, run_id):
+def collect_run(runs_dir, run_id, *, retry_deadline=None, retry_check=None):
+    """Collect normally; only transient Windows JSON replacement is retried.
+
+    Collection follows confirmed model stop and does not restart its budget.
+    Optional monotonic deadline belongs to the caller's postprocessing budget.
+    STOP still permits the first preservation write, but forbids waiting/retry.
+    """
+    root = run_dir_for(runs_dir, run_id)
+    def check():
+        if (any((parent/'STOP').exists() for parent in (root, *root.parents))
+                or (root.parent/'_control/STOP').exists()):
+            raise InterruptedError('Collection replacement retry stopped')
+        if retry_deadline is not None and time.monotonic() >= retry_deadline:
+            raise TimeoutError('Collection replacement retry deadline expired')
+        if retry_check is not None:
+            retry_check()
+    with util.collection_atomic_retries(check):
+        return _collect_run(runs_dir, run_id)
+
+
+def _collect_run(runs_dir, run_id):
     """Freeze the submission and normalize usage. Requires a confirmed stop."""
     run_dir = run_dir_for(runs_dir, run_id)
     manifest = load_manifest(runs_dir, run_id)

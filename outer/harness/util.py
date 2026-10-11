@@ -6,6 +6,9 @@ import hashlib
 import json
 import os
 import uuid
+import time
+from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
 
 # Collection excludes. Frozen artifact identity separately follows the SDK.
@@ -27,6 +30,41 @@ NORMALIZED_SUFFIXES = (
 )
 
 BOM = b'\xef\xbb\xbf'
+_ATOMIC_RETRY_CHECK = ContextVar('collection_atomic_retry_check', default=None)
+
+
+@contextmanager
+def collection_atomic_retries(check):
+    """Opt in only stopped collection writes; caller supplies STOP/deadline checks."""
+    token = _ATOMIC_RETRY_CHECK.set(check)
+    try:
+        yield
+    finally:
+        _ATOMIC_RETRY_CHECK.reset(token)
+
+
+def _replace_json(temp, path):
+    check = _ATOMIC_RETRY_CHECK.get()
+    delays = iter((0.05, 0.1, 0.2, 0.4))
+    while True:
+        try:
+            temp.replace(path)
+            return
+        except PermissionError as exc:
+            # Windows access denied / sharing violation only. Never chmod,
+            # delete the destination, rewrite the temp, or swallow another error.
+            if check is None or getattr(exc, 'winerror', None) not in (5, 32):
+                raise
+            delay = next(delays, None)
+            if delay is None:
+                raise
+            check()
+            # Poll STOP/deadline during the bounded backoff, not just afterwards.
+            until = time.monotonic() + delay
+            while time.monotonic() < until:
+                check()
+                time.sleep(min(0.025, max(0, until - time.monotonic())))
+            check()
 
 
 def read_json(path):
@@ -54,7 +92,7 @@ def write_json_atomic(path, value):
         stream.write('\n')
         stream.flush()
         os.fsync(stream.fileno())
-    temp.replace(path)
+    _replace_json(temp, path)
 
 
 def append_line(path, value):
