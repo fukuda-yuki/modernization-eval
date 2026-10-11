@@ -107,7 +107,13 @@ def response_tool_ids(raw):
         for choice in item.get('choices', []):
             if not isinstance(choice,dict) or not isinstance(choice.get('delta',{}),dict):
                 raise ValueError('Unrecognized SSE delta at tool boundary')
-            for call in choice.get('delta', {}).get('tool_calls', []):
+            calls = choice.get('delta', {}).get('tool_calls')
+            # A null or absent field contributes no tool-call delta. Do not
+            # coerce other malformed collection types into an empty group.
+            if calls is None: continue
+            if not isinstance(calls, list):
+                raise ValueError('Unrecognized SSE tool calls at tool boundary')
+            for call in calls:
                 if not isinstance(call,dict): raise ValueError('Unrecognized SSE tool call')
                 if call.get('id') and call['id'] not in ids: ids.append(call['id'])
     return ids
