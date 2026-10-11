@@ -105,9 +105,11 @@ class DockerTransport:
         port = PORT if role == 'worker' else 8080
         payload = {'url':f'http://127.0.0.1:{port}'+path,'body':body,'timeout':timeout}
         result = subprocess.run(['docker','exec','-i',self.state[role],'python3','-c',API],
-            input=json.dumps(payload),text=True,capture_output=True,env=child_environment(),timeout=timeout+.5)
+            input=json.dumps(payload).encode('utf-8'),capture_output=True,env=child_environment(),timeout=timeout+.5)
         if result.returncode: raise RuntimeError('Owned staged API call failed')
-        return json.loads(result.stdout)
+        # The native API returns UTF-8 JSON, independent of the host code page.
+        # Decode strictly here; never lose evidence in a text-mode reader thread.
+        return json.loads(result.stdout.decode('utf-8'))
 
     def barrier(self):
         return self.api('gateway','/control/staged-barrier',{'action':'inspect',

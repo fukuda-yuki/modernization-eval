@@ -86,7 +86,7 @@ class BoundaryTests(StageFixture):
             'Mounts':[{'Destination':'/workspace','Source':str(self.root/'workspace')}]}
         state={'worker':'owned-worker','gateway':'owned-gateway','run_id':'R','run_instance_id':'instance'}
         transport=staged_runtime.DockerTransport(self.root,state,self.controller,owner,'toy-model')
-        with patch.object(staged_runtime.subprocess,'run',return_value=Mock(returncode=0,stdout='{}')) as child:
+        with patch.object(staged_runtime.subprocess,'run',return_value=Mock(returncode=0,stdout=b'{}')) as child:
             transport.api('worker','/session/native/message',{'noReply':True,'parts':[{'text':self.additional}]})
             args,kwargs=child.call_args
             self.assertNotIn(self.additional,str(args));self.assertNotIn(self.additional,str(kwargs['env']))
