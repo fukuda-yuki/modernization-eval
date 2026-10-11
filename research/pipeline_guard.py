@@ -99,18 +99,94 @@ def owned_rows(config):
     return rows
 
 
-def budget_snapshot(config):
+def budget_snapshot(config, previous=None):
     """Independent raw usage accounting, including conservative missing duration.
 
     The original null duration is never filled. A stopped Run's start-to-confirmed
     cleanup interval is a separate conservative budget charge, not a measurement.
     """
-    from research import acquisition_pipeline as pipeline
+    from research import acquisition_pipeline as pipeline, live_pilot as live, pair_execution
     from outer.harness import util
-    budget = pipeline.Budget(config); charges = []
+    budget = pipeline.Budget(config); charges = []; observations = {}
+    previous_usage = (previous or {}).get('usage', {})
+    previous = (previous or {}).get('run_observations', {})
     for item in attempts(config):
-        paths = [item['path'].parent/c['run_id']/'manifest.json' for c in item['cases']]
-        present = [p for p in paths if p.exists()]
+        batch = item['path'].parent
+        journal = batch/'_control/pair-journal.jsonl'
+        current = pair_execution.state(journal)
+        preparation = batch/'pipeline-preparation.json'
+        present = []
+        for case in item['cases']:
+            identity = case['run_instance_id']; root = batch/case['run_id']; path = root/'manifest.json'
+            prior = previous.get(identity, {})
+            first_manifest = util.read_json(path) if path.exists() else {}
+            runtime_path = root/'runtime.json'
+            state = util.read_json(runtime_path) if runtime_path.exists() else None
+            reserved = current['reserved'].get(case['run_id'])
+            dispatched = current['dispatch'].get(case['run_id'])
+            prepared_path = batch/'pipeline-prepared'/(identity+'.json')
+            prepared = util.read_json(prepared_path) if prepared_path.exists() else None
+            if prior.get('prepared_receipt') and not prepared:
+                raise ValueError('Previously observed prepared evidence disappeared')
+            if prepared is not None and (prepared.get('kind') != 'pipeline_prepared_v1'
+                    or prepared.get('attempt') != live.reference(item['path']) or not prepared.get('binding')):
+                raise ValueError('Foreign prepared owner')
+            for binding in (reserved, dispatched, (prepared or {}).get('binding')):
+                if binding is not None and any(binding.get(k) != v for k, v in case.items()):
+                    raise ValueError('Foreign preparation/dispatch identity')
+            if state is not None and any(state.get(k) != case[k] for k in ('run_id', 'run_instance_id')):
+                raise ValueError('Foreign budget runtime identity')
+            # Raw gateway files only append. Previously observed bytes must not
+            # silently vanish (including a file truncated to an empty journal).
+            raw_bytes = {p.relative_to(root/'usage/raw').as_posix():p.stat().st_size
+                         for p in (root/'usage/raw').rglob('*') if p.is_file()}
+            if any(raw_bytes.get(k, -1) < v for k,v in prior.get('raw_bytes', {}).items()):
+                raise ValueError('Previously observed usage evidence disappeared')
+            if prior.get('dispatched') and not dispatched:
+                raise ValueError('Previously observed dispatch evidence disappeared')
+            sealed = (batch/'pipeline-acquisition.json').exists()
+            owner_lock = Path(config['root'])/'_owner/dispatch.lock'
+            # Complete historical Runs need no lease probe: briefly acquiring
+            # a free lock while a new controller starts could cause contention.
+            owner_active = (not first_manifest.get('run_instance_id') and
+                owner_lock.exists() and lease_held(owner_lock))
+            # Read the manifest AFTER downstream preparation/dispatch/runtime
+            # evidence: a stale UUID-less read followed by a newly prepared
+            # receipt would itself recreate the startup race. The upstream
+            # prepare intent is read last because it precedes every manifest.
+            manifest_present = path.exists()
+            manifest = util.read_json(path) if manifest_present else {}
+            preparing = util.read_json(preparation) if preparation.exists() else None
+            if preparing is not None and (preparing.get('kind') != 'pipeline_preparation_v1'
+                    or preparing.get('attempt') != live.reference(item['path'])):
+                raise ValueError('Foreign preparation owner')
+            if ((manifest_present and manifest.get('run_id') != case['run_id'])
+                    or ('run_instance_id' in manifest and manifest['run_instance_id'] != identity)):
+                raise ValueError('Foreign budget Run identity')
+            complete = all(manifest.get(k) == case[k] for k in ('run_id', 'run_instance_id'))
+            if not complete:
+                if (prior.get('identity_complete') or prior.get('runtime_present') or prepared or reserved
+                        or dispatched or state is not None or any(raw_bytes.values())
+                        or manifest.get('started_at') or manifest.get('model_called')
+                        or sealed):
+                    raise ValueError('Prepared/dispatched Run manifest evidence missing')
+                # A reservation alone does not prove an incomplete manifest is
+                # still being prepared. Require the adapter's bound prepare
+                # intent and the live campaign owner; its register callback
+                # irrevocably ends this exception before dispatch can occur.
+                if (manifest and not preparing) or not owner_active:
+                    raise ValueError('Incomplete manifest without active preparation owner')
+                status = 'preparing' if preparing else 'reserved_not_materialized'
+            else:
+                if prior.get('runtime_present') and state is None:
+                    raise ValueError('Previously observed runtime evidence disappeared')
+                present.append(path)
+                status = 'dispatched' if dispatched or manifest.get('started_at') else 'prepared_not_dispatched'
+            observations[identity] = dict(run_id=case['run_id'], identity_complete=complete,
+                state=status, dispatched=bool(dispatched), runtime_present=state is not None,
+                prepared_receipt=bool(prepared), raw_bytes=raw_bytes,
+                measured_duration_seconds=manifest.get('duration_seconds'),
+                usage_pending=not complete)
         usage = pipeline.usage_for_manifests(present)
         for path in present:
             manifest = util.read_json(path)
@@ -130,8 +206,11 @@ def budget_snapshot(config):
             if manifest.get('started_at') and not manifest.get('ended_at'):
                 elapsed = (datetime.now(timezone.utc)-datetime.fromisoformat(manifest['started_at'])).total_seconds()
                 if elapsed >= config['bounds']['run_seconds']: raise RuntimeError('Run wall ceiling')
+    if set(previous)-set(observations): raise ValueError('Previously observed attempt disappeared')
+    if any(budget.total[k] < previous_usage.get(k, 0) for k in ('requests', 'observed_tokens')):
+        raise ValueError('Previously observed usage decreased')
     budget.check(None, {})
-    return dict(usage=budget.total, conservative_duration_charges=charges)
+    return dict(usage=budget.total, conservative_duration_charges=charges, run_observations=observations)
 
 
 def latch(config, directory, reason, rows):
@@ -405,7 +484,7 @@ def controller(invocation):
                 done.set();thread.join(STOP_SECONDS+20)
         try:
             pipeline.run_pipeline(Path(value['repo']),Path(value['config']['path']),
-                                  attempt_policy=policy,owner_scope=owned_scope)
+                                  attempt_policy=policy,owner_scope=owned_scope,track_preparation=True)
         finally:
             util.write_new_json(directory/'controller-finished.json', identity.current_identity())
 
@@ -439,7 +518,7 @@ def supervise(invocation):
                 transient_since=None
                 while not done.is_set():
                     try:
-                        rows = owned_rows(config); result = budget_snapshot(config)
+                        rows = owned_rows(config); result = budget_snapshot(config, sample.get('result'))
                         sample.update(rows=rows, result=result, tick=time.monotonic())
                         transient_since=None
                     except Exception as exc:

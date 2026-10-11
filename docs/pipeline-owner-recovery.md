@@ -76,6 +76,27 @@ existing time origin is never reset. Resource observers remain the resource
 threshold authorities while both sides supervise their liveness through the
 original controller's existing checks.
 
+Guarded preparation has two additive owner records. The controller writes a
+hash-bound `pipeline-preparation.json` after reserving the attempt. The existing
+watcher's `register` callback writes `pipeline-prepared/<uuid>.json` after the
+frozen profile creator finishes, before pair reservation and dispatch. This
+does not change the frozen profile/runtime/evaluator helpers or their pins.
+`run.create_run` legitimately saves a manifest before `profiles.create` adds its
+UUID; an active bound preparation may therefore lack that key. The guard records
+this as pending usage with a null measured duration, while retaining all earlier
+observed usage and the original wall clock. It does not invent a completed Run
+or replace missing measurements with zero. A prepared receipt, pair reservation,
+dispatch, runtime, raw usage or prior complete observation ends that exception.
+Wrong identities and later disappearance of observed manifest/runtime/usage or
+dispatch evidence remain faults; the last successful budget observation remains
+in the supervisor result. There is no preparation-specific budget reset.
+
+Historical incomplete attempts without this owner evidence are not retroactively
+declared to be preparing. Keep their original reservations, STOP and files; they
+must be reconciled before restart. The existing technical-exclusion command still
+requires a valid complete Run and confirmed physical closure. It does not seal an
+interruption inside profile creation or manufacture the missing UUID/receipts.
+
 On a fault the guard publishes pipeline STOP first, then the exact phase/Run stop
 markers. Bounded stop helpers call the ordinary `stop_owned` (gateway admission
 fence, then owned worker/gateway stop) before lease-aware `request_stop` records
@@ -166,3 +187,12 @@ actual killed synthetic controller. Set `SAMPLE2_PIPELINE_DOCKER_FIXTURE=1` and 
 `test_pipeline_owned_stop.py`. It performs no pull or provider request, verifies
 admission/stop/cleanup receipts, and removes only its own synthetic containers.
 Neither this fixture nor ordinary unit tests constitute live model acceptance.
+
+`test_pipeline_preparation.py` additionally runs the actual guard and controller
+processes with the ordinary four-lane pipeline, watcher, pair execution and
+initial Run writer. Synthetic profile/resource/model/evaluator boundaries hold
+four UUID-less manifests across several independent samples, then allow normal
+preparation, dispatch and completion. A mixed two-ready/two-preparing case and
+post-dispatch manifest loss/identity mismatch exercise the same composed path.
+This is providerless control-stack coverage, not a real observer/Docker or model
+acceptance claim; those PC checks remain separate for every changed adapter head.

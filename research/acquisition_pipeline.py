@@ -141,6 +141,18 @@ class PairWatch(live_pilot.PilotWatch):
     def __init__(self, plan, digest, budget, identity):
         super().__init__(plan, digest)
         self.budget, self.identity = budget, identity
+        self.preparation_record = None
+
+    def register(self, batch, binding):
+        with self.lock:
+            super().register(batch, binding)
+            if self.preparation_record is not None:
+                # Frozen prepare() calls register only after profiles.create and
+                # its final manifest write. This durable transition precedes
+                # pair_reserved/dispatch; absent journals cannot undo it.
+                util.write_new_json(Path(batch)/'pipeline-prepared'/(binding['run_instance_id']+'.json'),
+                    dict(kind='pipeline_prepared_v1', attempt=live_pilot.reference(self.preparation_record),
+                         binding=binding, at=run.now()))
 
     def stop_receipt_path(self):
         # Separate acquisition owners share the epoch, not an exclusive receipt.
@@ -385,7 +397,7 @@ def pending_acquisition_slots(config, attempts, accepted):
     return pending, held
 
 
-def run_pipeline(repo, config_path, *, attempt_policy=None, owner_scope=None):
+def run_pipeline(repo, config_path, *, attempt_policy=None, owner_scope=None, track_preparation=False):
     config = util.read_json(config_path)
     if 'campaign_plan' in config:
         from research.campaign_initialization import verify_config
@@ -485,6 +497,10 @@ def run_pipeline(repo, config_path, *, attempt_policy=None, owner_scope=None):
                         reserved_count += 1
                         attempts.append(dict(slot=slot, record=str(record)))
                     watch = PairWatch(plan, util.sha256_file(epoch), budget, str(record))
+                    if track_preparation:
+                        watch.preparation_record = record
+                        util.write_new_json(batch/'pipeline-preparation.json',
+                            dict(kind='pipeline_preparation_v1', attempt=live_pilot.reference(record), at=run.now()))
                     error = None; acquired = False; reason = 'acquisition_interrupted'
                     try:
                         watch.check(); watch.start()
