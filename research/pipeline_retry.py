@@ -8,6 +8,7 @@ from contextlib import ExitStack
 from datetime import datetime
 import importlib.util
 import json
+import math
 from pathlib import Path
 import re
 import uuid
@@ -77,6 +78,57 @@ def _ordinary_timeout(value):
         or any(_ordinary_timeout(v) for v in value.values()))
 
 
+def _ambiguous_stop(value):
+    """RuntimeError also carries ordinary watcher ceilings and explicit STOP."""
+    if isinstance(value,list):return any(_ambiguous_stop(v) for v in value)
+    if not isinstance(value,dict):return False
+    return (any(value.get(k)=='RuntimeError' for k in ('reason','type','error_type','collection_error_type'))
+        or any(_ambiguous_stop(v) for v in value.values()))
+
+
+def _run_ceiling_clear(item,source,manifest,acquisition,journal):
+    """Veto ceilings from original bounds/times; never infer a fault from a stop."""
+    from research import live_pilot as live
+    from outer.harness import util
+    config=util.read_json(live.checked(item['epoch']['campaign_config']))
+    limits=[config['bounds']['run_seconds'],item['epoch']['bounds']['run_seconds']]
+    condition=util.read_json(source/'condition.json')
+    if 'budget' in condition:
+        budget=condition['budget']
+        if budget.get('kind')!='wall_clock_seconds' or budget.get('scope')!='run':
+            raise ValueError('Unknown original Run ceiling')
+        limits.append(budget['value'])
+    if any(type(v) not in (int,float) or not math.isfinite(v) or v<=0 for v in limits):
+        raise ValueError('Missing or invalid original Run ceiling')
+    start=datetime.fromisoformat(manifest['started_at'])
+    if start.tzinfo is None:raise ValueError('Unbound original Run start')
+    times=[manifest['ended_at']]
+    fault=acquisition.get('fault')
+    if fault:times.append(fault['at'])
+    stop_path=source/'stop-request.json';stop=None
+    if stop_path.exists():
+        stop=util.read_json(stop_path)
+        if any(k in stop and stop[k]!=manifest[k] for k in ('run_id','run_instance_id')):
+            raise ValueError('Foreign original Run stop')
+        times.append(stop['requested_at'])
+    elif manifest.get('end_reason')=='operator_stop':
+        raise ValueError('Missing original Run stop evidence; retain and reconcile')
+    elapsed=[]
+    for value in times:
+        end=datetime.fromisoformat(value)
+        if end.tzinfo is None or end<start:raise ValueError('Unbound original Run stop time')
+        elapsed.append((end-start).total_seconds())
+    duration=manifest.get('duration_seconds')
+    if duration is not None:
+        if type(duration) not in (int,float) or not math.isfinite(duration) or duration<0:
+            raise ValueError('Invalid original Run duration')
+        elapsed.append(duration)
+    if max(elapsed)>=min(limits):
+        raise ValueError('Original Run ceiling reached; not infrastructure retry authority')
+    if _ordinary_timeout(stop) or _ambiguous_stop([acquisition,journal,stop]):
+        raise ValueError('Ambiguous or ordinary original stop; retain and reconcile')
+
+
 def adjudicated_fault(item,source,adjudication,authorization_reference):
     """Validate an explicit private ruling; neither error prose nor a code is authority."""
     from research import live_pilot as live,saved_reassessment,pair_execution,acquisition_pipeline
@@ -124,6 +176,7 @@ def adjudicated_fault(item,source,adjudication,authorization_reference):
             raise ValueError('Recorded scored result cannot become an infrastructure exclusion')
         if _ordinary_timeout([manifest,acquisition,runtime,journal]) or _product_failure([manifest,acquisition,runtime,journal]):
             raise ValueError('Ordinary timeout/budget stop or product failure is not infrastructure retry authority')
+        _run_ceiling_clear(item,source,manifest,acquisition,journal)
         observed=acquisition_pipeline.usage_for_manifests([source/'manifest.json'])
         if observed['dispatched_runs']!=1 or acquisition.get('usage')!=observed:
             raise ValueError('Original acquisition usage differs; retain and reconcile')

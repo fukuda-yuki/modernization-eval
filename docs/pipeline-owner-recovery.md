@@ -216,6 +216,16 @@ number is insufficient. The common branch rejects retained product failures,
 recorded timeouts/budget stops and explicit timeout exception records regardless
 of the ruling. Its classification is never inferred from a new exception name.
 
+The common branch also checks the original campaign/epoch Run ceilings (and
+condition wall budget, when present) against the saved duration, Run end,
+watcher-fault time and Run stop-request time. Reaching a ceiling blocks exclusion
+even when the saved end reason is `operator_stop`. Missing bounds, invalid times,
+foreign stop identity or an operator stop without its original marker stay held.
+The frozen watcher may retain only `RuntimeError` for a ceiling, cumulative budget
+or explicit STOP. Such generic exception records remain ambiguous and held even
+below the Run ceiling; an adjudication cannot restore the lost distinction.
+This checks retained evidence without changing the producer, its limits or clocks.
+
 When an evaluation exists, the same ruling uses the evaluation checks below.
 Fault evidence must then belong to the selected evaluation directory, its
 sequence's original stdout/stderr logs, or the original `pipeline-evaluation.log`.

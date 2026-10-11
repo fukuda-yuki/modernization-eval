@@ -8,17 +8,27 @@ from unittest.mock import patch
 
 import test_pipeline_retry as fixture
 import test_pipeline_evaluation_retry as evaluation_fixture
-from outer.harness import util,runtime
-from research import acquisition_pipeline as pipeline,acquisition_readiness
+from outer.harness import util,runtime,run,live_usage
+from research import acquisition_pipeline as pipeline,acquisition_readiness,campaign_initialization
 from research import live_pilot as live,pair_execution,pipeline_guard as guard,pipeline_retry as retry
 
 REPO=fixture.REPO
 REAL_STOPPED=guard.stopped
 
 
+def bind_watch_plan(case):
+    attempt=util.read_json(case.record);path=Path(attempt['epoch']['path']);plan=util.read_json(path)
+    plan.update(campaign_config=live.reference(case.config_path),phase_id='synthetic-watch',thresholds={},
+        bounds=dict(run_seconds=100,max_runs=1))
+    util.write_json_atomic(path,plan);attempt['epoch']=live.reference(path)
+    util.write_json_atomic(case.record,attempt)
+    return path
+
+
 class InfrastructureRetryTests(unittest.TestCase):
     def setUp(self):
         fixture.RetryTests.setUp(self)
+        bind_watch_plan(self)
         self.authorization='synthetic-existing-infrastructure-adjudication'
         self.manifest.update(end_reason='environment_failure',duration_seconds=2.5)
         util.write_json_atomic(self.source/'manifest.json',self.manifest)
@@ -158,6 +168,91 @@ class InfrastructureRetryTests(unittest.TestCase):
         self.write_failure(TimeoutError('Synthetic ordinary timeout'))
         self.bind_ruling();self.assert_refused()
 
+    def test_original_watcher_and_runtime_stop_writers_do_not_authorize_ceiling_retry(self):
+        # Exercise run_pipeline's real acquisition writer, PairWatch._loop/latch
+        # and runtime.request_stop, using a synthetic plan and resource boundary.
+        self.config['bounds'].update(max_pair_attempts=1,disk_free_min_bytes=0)
+        self.config['policy']=dict(active_model_pairs=1)
+        util.write_json_atomic(self.config_path,self.config);epoch=bind_watch_plan(self)
+        for path in (self.record,self.acquisition,self.root/'events.jsonl'):path.unlink()
+        self.manifest.update(ended_at=None,duration_seconds=None,stop_confirmed=False,end_reason=None)
+        util.write_json_atomic(self.source/'manifest.json',self.manifest);self.write_failure(None)
+        counters=dict(requests=0,observed_tokens=0,accumulated_run_seconds=0,
+            longest_active_run_seconds=0,http_inflight=0,disk_free_bytes=1)
+        stopped_at='2026-10-11T00:01:40+00:00'
+        def cleanup(root):
+            manifest=util.read_json(root/'manifest.json')
+            manifest['network_cleanup']=dict(confirmed=True,ended_at=stopped_at)
+            util.write_json_atomic(root/'manifest.json',manifest)
+            return manifest['network_cleanup']
+        def execute(*args,budget_watch,**kwargs):
+            budget_watch.register(self.source.parent,self.case)
+            with patch.object(budget_watch,'counters',return_value={**counters,'longest_active_run_seconds':100}), \
+                    patch.object(budget_watch.done,'wait',return_value=False),patch.object(run,'now',return_value=stopped_at):
+                with self.assertRaisesRegex(RuntimeError,'Run wall ceiling'):budget_watch.check()
+                budget_watch._loop()
+            self.watch_stop=budget_watch.stop_receipt_path()
+            return dict(reason='implementation_fault')
+        with patch.object(campaign_initialization,'verify_config'),patch.object(live,'verify_pins'), \
+                patch.object(pipeline,'create_epoch',return_value=epoch), \
+                patch.object(pipeline.PairWatch,'start'),patch.object(pipeline.PairWatch,'counters',return_value=counters), \
+                patch.object(live,'execute_owned_pair_scope',side_effect=execute), \
+                patch.object(runtime,'fence_owned'),patch.object(runtime,'stop_owned',return_value=True), \
+                patch.object(runtime,'_owned_container',return_value=None),patch.object(runtime,'record_cleanup',side_effect=cleanup), \
+                patch.object(live_usage,'update_manifest_evidence'),patch.object(live_usage,'collect'):
+            with self.assertRaisesRegex(RuntimeError,'Saved evaluation recovery required'):
+                pipeline.run_pipeline(REPO,self.config_path)
+        self.saved=util.read_json(self.acquisition);self.manifest=util.read_json(self.source/'manifest.json')
+        self.assertEqual(self.saved['fault']['reason'],'RuntimeError');self.assertIsNone(self.saved['error'])
+        self.assertEqual(self.manifest['end_reason'],'operator_stop');self.assertIsNone(self.manifest['duration_seconds'])
+        self.assertEqual(util.read_json(self.watch_stop)['reason'],'RuntimeError')
+        self.assertEqual(util.read_json(self.source/'stop-request.json'),dict(requested_at=stopped_at))
+        self.bind_ruling(self.acquisition)
+        with self.assertRaisesRegex(ValueError,'Run ceiling reached'):self.exclude()
+        self.assert_refused()
+
+    def test_runtime_error_type_alone_stays_held_even_below_the_run_ceiling(self):
+        self.write_failure(RuntimeError('Synthetic detail lost by implementation writer'))
+        self.bind_ruling();self.assert_refused()
+        self.write_failure(None)
+        self.saved['fault']=dict(reason='RuntimeError',at='2026-10-11T00:00:10+00:00')
+        util.write_json_atomic(self.acquisition,self.saved);self.bind_ruling(self.acquisition)
+        with self.assertRaisesRegex(ValueError,'Ambiguous or ordinary'):self.exclude()
+        self.assert_refused()
+
+    def test_original_duration_end_fault_and_stop_times_independently_veto_run_ceiling(self):
+        original_manifest=copy.deepcopy(self.manifest);original_saved=copy.deepcopy(self.saved)
+        for evidence in ('duration','end','fault','stop'):
+            with self.subTest(evidence=evidence):
+                self.manifest=copy.deepcopy(original_manifest);self.saved=copy.deepcopy(original_saved)
+                if evidence=='duration':self.manifest['duration_seconds']=100
+                if evidence=='end':self.manifest['ended_at']='2026-10-11T00:01:40+00:00'
+                if evidence=='fault':self.saved['fault']=dict(reason='SyntheticIOFailure',at='2026-10-11T00:01:40+00:00')
+                if evidence=='stop':util.write_new_json(self.source/'stop-request.json',dict(requested_at='2026-10-11T00:01:40+00:00'))
+                util.write_json_atomic(self.source/'manifest.json',self.manifest)
+                self.saved['usage']=pipeline.usage_for_manifests([self.source/'manifest.json'])
+                util.write_json_atomic(self.acquisition,self.saved);self.bind_ruling()
+                with self.assertRaisesRegex(ValueError,'Run ceiling reached'):self.exclude()
+                self.assert_refused()
+
+    def test_missing_or_ambiguous_original_stop_evidence_stays_held(self):
+        self.manifest['end_reason']='operator_stop';util.write_json_atomic(self.source/'manifest.json',self.manifest)
+        self.bind_ruling();self.assert_refused()
+        for stop in ({'requested_at':None},{'requested_at':'2026-10-11T00:00:10'},
+                     {'requested_at':'2026-10-11T00:00:10+00:00','run_instance_id':'2'*32},
+                     {'requested_at':'2026-10-11T00:00:10+00:00','reason':'RuntimeError'}):
+            with self.subTest(stop=stop):
+                util.write_json_atomic(self.source/'stop-request.json',stop)
+                self.bind_ruling();self.assert_refused()
+
+    def test_original_epoch_ceiling_cannot_be_replaced_by_a_larger_campaign_ceiling(self):
+        epoch=Path(util.read_json(self.record)['epoch']['path']);plan=util.read_json(epoch)
+        for bounds in (dict(run_seconds=20),{},dict(run_seconds=float('nan'))):
+            with self.subTest(bounds=bounds):
+                plan['bounds']=bounds;util.write_json_atomic(epoch,plan)
+                attempt=util.read_json(self.record);attempt['epoch']=live.reference(epoch)
+                util.write_json_atomic(self.record,attempt);self.bind_ruling();self.assert_refused()
+
     def test_retained_product_failure_blocks_the_acquisition_path_too(self):
         self.saved['verdict']='fail';util.write_json_atomic(self.acquisition,self.saved)
         self.bind_ruling();self.assert_refused()
@@ -208,6 +303,7 @@ class InfrastructureRetryTests(unittest.TestCase):
         case=evaluation_fixture.EvaluationInfrastructureRetryTests()
         case.setUp()
         try:
+            bind_watch_plan(case);case.bind_ruling()
             binding=guard.attempts(case.config)[0]['cases'][0]
             journal=case.source.parent/'_control/pair-journal.jsonl'
             pair_execution.append(journal,dict(kind='pair_reserved',assignments=[binding]))
