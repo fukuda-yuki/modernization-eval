@@ -1,10 +1,11 @@
 """Explicit infrastructure adjudication; only artificial, providerless originals."""
 import copy
+from pathlib import Path
 import unittest
 from unittest.mock import patch
 
 import test_pipeline_retry as retry_fixture
-from outer.harness import evaluate,util
+from outer.harness import evaluate,util,runtime
 from research import acquisition_pipeline as pipeline,acquisition_readiness,campaign_initialization
 from research import live_pilot as live,pair_execution,pipeline_guard as guard,pipeline_retry as retry
 
@@ -214,13 +215,53 @@ class EvaluationInfrastructureRetryTests(unittest.TestCase):
             with self.subTest(changes=changes):
                 util.write_json_atomic(self.directory/'browser-cleanup.json',dict(self.closure,**changes));self.assert_refused()
 
-    def test_missing_output_with_fixed_missing_output_record_is_supported(self):
-        (self.directory/'evaluation.json').unlink();self.scoring.pop('evaluation_sha256')
-        self.scoring.update(verdict=None,evaluation_id=None)
-        util.write_json_atomic(self.directory/'record.json',self.scoring)
-        (self.source/'evaluations/index.jsonl').unlink();evaluate._append_index(self.source,self.scoring)
-        self.bind_ruling();self.exclude()
+    def produce_directoryless_fault(self):
+        """Actual score_run writer, synthetic evaluator/resource boundary only."""
+        condition=util.read_json(self.source/'condition.json')
+        condition['evaluation']['evaluator_build']=dict(source_path='synthetic',command='never executed',
+            sdk_version='synthetic',sha256_origin='synthetic',clean_worktree=True)
+        util.write_json_atomic(self.source/'condition.json',condition)
+        self.manifest['condition_sha256']=util.sha256_file(self.source/'condition.json')
+        util.write_json_atomic(self.source/'manifest.json',self.manifest)
+        def no_output(command,repo,environment,out,err,timeout):
+            directory=Path(command[command.index('--out')+1])
+            # This synthetic closure is a separate required proof, not something
+            # the missing-output writer is claimed to produce automatically.
+            util.write_new_json(directory/'browser-cleanup.json',self.closure)
+            err.write(b'Synthetic evaluator infrastructure fault without output')
+            return 2,False
+        def scoring_command(condition,frozen,out,work,assets,version,sequence,**kwargs):
+            return None,['synthetic-never-executed','--out',str(out)]
+        with patch.object(runtime,'scoring_command',side_effect=scoring_command), \
+                patch.object(evaluate,'run_evaluator',side_effect=no_output):
+            self.scoring=evaluate.score_run(REPO,self.source.parent,'R')
+        self.directory=next((self.source/'evaluations').glob('fault-002-*'))
+        self.fault=self.source/'evidence/scoring-002-stderr.log'
+        self.assertNotIn('directory',self.scoring)
+        self.assertNotIn('directory',evaluate.last_scoring(self.source))
+        self.assertNotIn('evaluation_sha256',self.scoring)
+        self.bind_ruling()
+
+    def test_actual_missing_output_writer_is_supported_without_rewriting_record_or_index(self):
+        self.produce_directoryless_fault();originals=retry.source_inventory(self.source)
+        ref=self.exclude();self.assertEqual(self.exclude(),ref)
+        self.assertTrue(retry.Exclusions(self.config_path).excluded(dict(record=str(self.record))))
+        self.assertEqual(retry.source_inventory(self.source),originals)
         self.assertFalse((self.directory/'evaluation.json').exists())
+
+    def test_directoryless_fault_cannot_select_a_stale_or_foreign_record(self):
+        self.produce_directoryless_fault()
+        baseline=copy.deepcopy(self.ruling)
+        for path in (self.source/'evaluations/evaluator_fault-001-synthetic/record.json',
+                self.root/'foreign'/('fault-002-'+'b'*32)/'record.json'):
+            if not path.exists():util.write_new_json(path,self.scoring)
+            self.ruling=copy.deepcopy(baseline);self.ruling['evaluation_record']=live.reference(path)
+            util.write_json_atomic(self.ruling_path,self.ruling);self.assert_refused()
+
+    def test_directoryless_fault_with_two_matching_original_records_is_held(self):
+        self.produce_directoryless_fault()
+        util.write_new_json(self.source/'evaluations'/('fault-002-'+'a'*32)/'record.json',self.scoring)
+        self.assert_refused()
 
     def test_deleted_previously_recorded_output_refuses(self):
         (self.directory/'evaluation.json').unlink();self.assert_refused()

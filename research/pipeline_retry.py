@@ -9,6 +9,7 @@ from datetime import datetime
 import importlib.util
 import json
 from pathlib import Path
+import re
 import uuid
 
 KIND='pipeline_technical_exclusion_v1'
@@ -106,12 +107,27 @@ def evaluation_fault(item,source,adjudication,authorization_reference):
     index=evaluate.read_index(source)
     if not index or any(r.get('adopted') is True or r.get('scoring_state')=='scored' or _product_failure(r) for r in index):
         raise ValueError('Missing evaluation or retained scored/product result')
-    last=index[-1];directory=live.safe_path(source/last['directory'])
+    last=index[-1];record_path=live.checked(value['evaluation_record'])
+    if 'directory' in last:
+        directory=live.safe_path(source/last['directory'])
+    else:
+        # The original missing-output writer omits directory in both record and
+        # index. Bind its existing, adjudicated record without repairing either.
+        directory=record_path.parent;sequence=last.get('sequence')
+        if (type(sequence) is not int or sequence<1 or directory.parent!=source/'evaluations'
+                or not re.fullmatch(r'fault-'+f'{sequence:03d}'+r'-[0-9a-f]{32}',directory.name)):
+            raise ValueError('Unbound directory-less evaluation fault')
+        matches=[]
+        for candidate in (source/'evaluations').glob(f'fault-{sequence:03d}-*/record.json'):
+            saved=util.read_json(candidate)
+            if all(saved.get(k)==v for k,v in last.items()):matches.append(candidate)
+        if matches!=[record_path]:raise ValueError('Ambiguous directory-less evaluation fault')
     if not directory.is_relative_to(source/'evaluations'):
         raise ValueError('Evaluation evidence escaped original Run')
-    record_path=live.checked(value['evaluation_record'])
     if record_path!=directory/'record.json':raise ValueError('Adjudication must bind the latest original evaluation')
     record=util.read_json(record_path)
+    if 'directory' not in last and ('directory' in record or record.get('evaluation_sha256') is not None):
+        raise ValueError('Directory-less record must be the original missing-output fault')
     if (any(record.get(k)!=v for k,v in last.items()) or record.get('run_id')!=case['run_id']
             or record.get('scoring_state')!='evaluator_fault' or record.get('adopted') is not False
             or record.get('evaluator_timed_out') is not False or record.get('evaluator_exit_code')!=2

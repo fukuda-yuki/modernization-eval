@@ -196,7 +196,11 @@ available unchanged for future resume validation.
 The saved scoring must be an unadopted `evaluator_fault`, exit code 2, explicitly
 not timed out, without mismatches or numeric quality. Output, when produced, must
 be an identity-bound error for the fixed artifact/spec/evaluator. Missing output
-is eligible only when the original record never claimed an output hash. Scored
+is eligible only when the original record never claimed an output hash.
+The original missing-output writer omits `directory` in its record and index.
+That format is resolved through the adjudicated record reference only when it is
+the unique matching `evaluations/fault-SEQUENCE-UUID/record.json` for the latest
+index entry; neither original file is rewritten. Scored
 results, quality failures, product-prerequisite failures and retained partial
 product failures (including earlier or HTTP-only results) block this branch.
 An ordinary timeout, exception prose or SQLite error number alone never permits
