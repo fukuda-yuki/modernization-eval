@@ -1,5 +1,6 @@
 """Regression boundaries for failed preparation; no provider or private inputs."""
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 from pathlib import Path
 import subprocess
 import sys
@@ -79,9 +80,13 @@ class PreDispatchRecoveryTests(unittest.TestCase):
         self.assertFalse((proxy.directory/'shutdown-ack.json').exists())
 
     def undispatched_origin(self):
+        config = self.root/'old-config.json'
+        util.write_new_json(config, dict(started_at='2026-10-01T00:00:00+00:00'))
+        config_ref = live_pilot.reference(config)
         batch = self.root/'pair-1'; run_root = batch/'fixture'
         manifest = run_root/'manifest.json'
-        util.write_new_json(manifest, dict(run_id='fixture', run_instance_id='synthetic-id', started_at=None))
+        util.write_new_json(manifest, dict(run_id='fixture', run_instance_id='synthetic-id', started_at=None,
+            acquisition=dict(campaign_config=config_ref)))
         journal = batch/'_control/pair-journal.jsonl'
         util.append_line(journal, dict(kind='pair_reserved', assignments=[dict(run_instance_id='synthetic-id')]))
         acquisition = batch/'pipeline-acquisition.json'
@@ -94,6 +99,24 @@ class PreDispatchRecoveryTests(unittest.TestCase):
                 manifest=live_pilot.reference(manifest), acquisition=live_pilot.reference(acquisition),
                 journal=live_pilot.reference(journal))]))
         return receipt, run_root
+
+    def test_receipt_clock_cannot_reset_an_exhausted_original_campaign_budget(self):
+        receipt, _ = self.undispatched_origin()
+        start, usage = resource_origin.read(live_pilot.reference(receipt))
+        budget = acquisition_pipeline.Budget(dict(usage=usage, root=str(self.root), started_at=start,
+            bounds=dict(request_count=100, observed_tokens=100, accumulated_run_seconds=100, wall_seconds=60)))
+        with self.assertRaisesRegex(RuntimeError, 'wall budget'): budget.check(None, {})
+        value = util.read_json(receipt)
+        value['started_at'] = datetime.now(timezone.utc).isoformat()
+        util.write_json_atomic(receipt, value)
+        with self.assertRaisesRegex(ValueError, 'campaign clock'):
+            resource_origin.read(live_pilot.reference(receipt))
+
+    def test_original_campaign_clock_remains_hash_bound(self):
+        receipt, _ = self.undispatched_origin()
+        util.write_json_atomic(self.root/'old-config.json', dict(started_at=datetime.now(timezone.utc).isoformat()))
+        with self.assertRaisesRegex(ValueError, 'Pinned pilot reference changed'):
+            resource_origin.read(live_pilot.reference(receipt))
 
     def test_undispatched_history_keeps_clock_without_claiming_completed_runs(self):
         receipt, run_root = self.undispatched_origin()

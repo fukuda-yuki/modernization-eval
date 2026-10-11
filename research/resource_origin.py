@@ -46,6 +46,15 @@ def verify_undispatched(row, identities):
             or acquisition.get('usage', {}).get('unknown_usage_requests')):
         raise ValueError('Undispatched attempt changed, duplicated or possibly sent; no resend')
     identities.add(identity)
+    acquisition_binding = manifest.get('acquisition')
+    config_ref = (acquisition_binding.get('campaign_config')
+                  if isinstance(acquisition_binding, dict) else None)
+    if not isinstance(config_ref, dict):
+        raise ValueError('Original campaign clock reference required')
+    config = util.read_json(live_pilot.checked(config_ref))
+    if not isinstance(config, dict) or not isinstance(config.get('started_at'), str):
+        raise ValueError('Original campaign clock missing')
+    return config['started_at']
 
 
 def read(reference):
@@ -61,7 +70,8 @@ def read(reference):
     if origin.tzinfo is None or origin>datetime.now(timezone.utc):raise ValueError('Invalid shared resource clock origin')
     paths=[];identities=set()
     for row in receipt.get('undispatched_attempts', []):
-        verify_undispatched(row, identities)
+        if verify_undispatched(row, identities) != receipt['started_at']:
+            raise ValueError('Resource origin differs from the original campaign clock')
     for row in receipt['runs']:
         if set(row)!={'manifest','raw_usage'}:raise ValueError('Explicit sealed technical Run evidence required')
         path=live_pilot.checked(row['manifest']);manifest=util.read_json(path)
