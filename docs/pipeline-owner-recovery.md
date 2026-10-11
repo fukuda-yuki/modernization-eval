@@ -127,7 +127,7 @@ python -B -X utf8 C:\guard-checkout\research\pipeline_retry.py --repo C:\frozen-
 
 `--reason technical_failure` instead requires existing provider/infrastructure
 classification, a bound original collection-fault receipt, or the explicitly
-adjudicated evaluation-infrastructure evidence described below. Ordinary low
+adjudicated infrastructure evidence described below. Ordinary low
 quality, product/build failure, or an already adopted slot is not retry authority.
 The user-instruction reference identifies authorization that already exists; the
 command does not manufacture approval. It is limited to single-condition attempts
@@ -144,13 +144,19 @@ metadata and the OS lock operation. Nested files with the same name remain hashe
 A repeated identical exclusion is idempotent. Original source changes, duplicate
 selection, partial journals, competing owners or conflicting exclusions are held.
 
-### Explicit evaluation-infrastructure adjudication
+### Explicit infrastructure adjudication
 
-For a completed acquisition with an incomplete infrastructure-fault evaluation,
-the same command accepts `--reason technical_failure` with
-`--evaluation-adjudication C:\private\ruling.json`. This optional branch records the operator's already
-authorized ruling. It does not diagnose a database error, invent an approval,
+Acquisition, persistence and evaluation infrastructure faults use the same
+`--reason technical_failure --adjudication C:\private\ruling.json` operation.
+The private ruling supplies explicit attribution; the existing original failure
+records establish what occurred. New exception classes or OS error numbers do
+not require new eligibility branches. The operation does not invent an approval,
 repair data, run an evaluator, change a score, or dispatch a replacement.
+
+The old `--evaluation-adjudication` spelling remains an alias. Existing
+`evaluation_infrastructure_exclusion_adjudication_v1` rulings with classification
+`evaluation_infrastructure_fault` retain their evaluation-only checks and receipt
+format; they need not be rewritten. New rulings use this common contract:
 
 Prepare the private ruling **outside the original Run**, from the retained
 original evidence and an explicit adjudication. Do not edit any acquisition,
@@ -158,12 +164,12 @@ evaluation, manifest or event ledger to make it eligible. Its JSON contract is:
 
 ```json
 {
-  "kind": "evaluation_infrastructure_exclusion_adjudication_v1",
+  "kind": "infrastructure_exclusion_adjudication_v1",
   "run_id": "ORIGINAL_RUN_ID",
   "run_instance_id": "ORIGINAL_UUID",
   "authorization_reference": "EXISTING_USER_INSTRUCTION_REFERENCE",
   "decision": {
-    "classification": "evaluation_infrastructure_fault",
+    "classification": "infrastructure_fault",
     "low_level_cause": "unknown",
     "product_defect": false,
     "quality_selection": false,
@@ -176,22 +182,44 @@ evaluation, manifest or event ledger to make it eligible. Its JSON contract is:
   "acquisition": {"path": "ABSOLUTE_ACQUISITION_PATH", "sha256": "ACTUAL_SHA256"},
   "pipeline_evaluation": null,
   "manifest": {"path": "ABSOLUTE_MANIFEST_PATH", "sha256": "ACTUAL_SHA256"},
-  "snapshot": {"path": "ABSOLUTE_SNAPSHOT_PATH", "sha256": "ACTUAL_SHA256"},
-  "evaluation_index": {"path": "ABSOLUTE_EVALUATION_INDEX_PATH", "sha256": "ACTUAL_SHA256"},
-  "evaluation_record": {"path": "ABSOLUTE_LATEST_RECORD_PATH", "sha256": "ACTUAL_SHA256"},
+  "runtime": {"path": "ABSOLUTE_RUNTIME_PATH", "sha256": "ACTUAL_SHA256"},
+  "pair_journal": {"path": "ABSOLUTE_PAIR_JOURNAL_PATH", "sha256": "ACTUAL_SHA256"},
+  "snapshot": null,
+  "evaluation_index": null,
+  "evaluation_record": null,
   "fault_evidence": [{"path": "ABSOLUTE_ORIGINAL_FAULT_EVIDENCE_PATH", "sha256": "ACTUAL_SHA256"}]
 }
 ```
 
 Each reference binds the actual existing file and hash. `authorization_reference`
-must match the CLI argument. The ruling must bind the exact campaign, reservation,
-attempt and UUID, a completed acquisition, the fixed snapshot and the latest
-original scoring record/index. `pipeline_evaluation` must reference the original
-`pipeline-evaluation.json` if present, or be null if absent; later appearance,
-loss or mutation is rejected. Fault evidence must be nonempty, belong to that
-evaluation directory, its sequence's original stdout/stderr logs, or the original
-`pipeline-evaluation.log`. The ruling and evidence remain private and must remain
-available unchanged for future resume validation.
+must match the CLI argument. The common ruling binds the exact campaign, reserved
+attempt and UUID, original acquisition receipt, manifest, runtime identity and
+single-Run dispatch journal. The journal reader also verifies its referenced
+implementation receipts. Acquisition usage must still equal the original raw
+observations and manifest measurements; missing earlier costs cannot become zero.
+All old reservations, observed token components and unknown totals remain counted.
+A dispatched Run with no requests retains its dispatch and elapsed time.
+
+`snapshot`, `evaluation_index` and `pipeline_evaluation` reference their original
+files when present, or must explicitly be null when absent. Later appearance,
+loss or mutation is rejected. `evaluation_record` references the latest original
+record when an evaluation exists; before evaluation it is null. Unindexed
+scoring artifacts stay held. A failed acquisition need not have a snapshot or a
+score: the exclusion neither fabricates those files nor changes `acquired`.
+
+Before evaluation, `fault_evidence` must include a fixed acquisition error/fault
+receipt or the fixed journal/implementation receipt recording the failure. Extra
+original controller evidence may come from the Run's `evidence` or `_controller`
+directory or the batch's `pipeline-evaluation.log`; arbitrary external files or
+product files do not supply fault authority. A bare exception string or an error
+number is insufficient. The common branch rejects retained product failures,
+recorded timeouts/budget stops and explicit timeout exception records regardless
+of the ruling. Its classification is never inferred from a new exception name.
+
+When an evaluation exists, the same ruling uses the evaluation checks below.
+Fault evidence must then belong to the selected evaluation directory, its
+sequence's original stdout/stderr logs, or the original `pipeline-evaluation.log`.
+The ruling and all evidence remain private and unchanged for resume validation.
 
 The saved scoring must be an unadopted `evaluator_fault`, exit code 2, explicitly
 not timed out, without mismatches or numeric quality. Output, when produced, must
@@ -207,7 +235,7 @@ An ordinary timeout, exception prose or SQLite error number alone never permits
 exclusion. The explicit ruling is required in addition to these checks; its
 `low_level_cause` remains unknown.
 
-Existing recorded evaluation closure must be confirmed: an owned browser-resource
+When evaluation occurred, its recorded closure must be confirmed: an owned browser-resource
 receipt is checked with the existing saved-cleanup validator; a no-browser-resource
 receipt must bind the Run, artifact/spec and removed evaluator container. Missing
 or ambiguous closure stays held. The command also holds the existing pair lock to
@@ -218,13 +246,13 @@ The same `_exclusions` receipt and `attempt_excluded` event retain the original
 acquisition/evaluation bytes, all costs and missingness, shared reservation count
 and campaign clock. Resume revalidates the ruling and its fixed evidence, skips
 only that attempt, and uses ordinary same-allocation dispatch with a fresh UUID.
-There is no automatic conversion of every evaluation error into retry authority.
+There is no automatic conversion of every exception into retry authority.
 
 Deploy this control-adapter change only after the current initial assignments
 finish and the campaign/evaluator are safely stopped, then use the existing retry
 stage. Do not replace running code or modify frozen protocol/runtime/evaluator
 pins. The initial Windows/cloud acceptance of the base owner adapter does not
-constitute execution-PC acceptance of this additional branch.
+constitute execution-PC acceptance of the common adjudication extension.
 
 ### Interrupted preparations
 

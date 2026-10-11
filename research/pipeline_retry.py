@@ -15,6 +15,7 @@ import uuid
 KIND='pipeline_technical_exclusion_v1'
 PREPARATION='pre_dispatch_preparation_interrupted_v1'
 EVALUATION_ADJUDICATION='evaluation_infrastructure_exclusion_adjudication_v1'
+INFRASTRUCTURE_ADJUDICATION='infrastructure_exclusion_adjudication_v1'
 EXECUTION_FILES=('runtime.json','implementation-receipt.json','snapshot.json',
                  'usage/normalized.json','usage/provenance.json','evidence/agent.jsonl')
 
@@ -67,35 +68,65 @@ def _product_failure(value):
         or any(_product_failure(v) for v in value.values()))
 
 
-def evaluation_fault(item,source,adjudication,authorization_reference):
+def _ordinary_timeout(value):
+    if isinstance(value,list):return any(_ordinary_timeout(v) for v in value)
+    if not isinstance(value,dict):return False
+    return (any(value.get(k) is True for k in ('evaluator_timed_out','timed_out'))
+        or any(value.get(k) in ('timeout','budget_exceeded','budget_stop') for k in ('end_reason','reason'))
+        or any(value.get(k) in ('TimeoutError','TimeoutExpired') for k in ('type','error_type','collection_error_type'))
+        or any(_ordinary_timeout(v) for v in value.values()))
+
+
+def adjudicated_fault(item,source,adjudication,authorization_reference):
     """Validate an explicit private ruling; neither error prose nor a code is authority."""
-    from research import live_pilot as live,saved_reassessment
+    from research import live_pilot as live,saved_reassessment,pair_execution,acquisition_pipeline
     from outer.harness import util,evaluate,browser_cleanup
     path=live.checked(adjudication);value=util.read_json(path)
     if path.is_relative_to(source):raise ValueError('Adjudication must remain outside the original Run')
     case=item['cases'][0]
     decision=value.get('decision',{})
-    if (value.get('kind')!=EVALUATION_ADJUDICATION
+    legacy=value.get('kind')==EVALUATION_ADJUDICATION
+    if (value.get('kind') not in (EVALUATION_ADJUDICATION,INFRASTRUCTURE_ADJUDICATION)
             or value.get('authorization_reference')!=authorization_reference
             or not authorization_reference
             or any(value.get(k)!=case[k] for k in ('run_id','run_instance_id'))
-            or decision.get('classification')!='evaluation_infrastructure_fault'
+            or decision.get('classification')!=('evaluation_infrastructure_fault' if legacy else 'infrastructure_fault')
             or decision.get('low_level_cause')!='unknown'
             or any(decision.get(k) is not False for k in ('product_defect','quality_selection','ordinary_timeout'))
             or decision.get('retry_requires_new_uuid') is not True
             or not isinstance(decision.get('basis'),str) or not decision['basis'].strip()):
-        raise ValueError('Explicit evaluation-infrastructure adjudication required')
+        raise ValueError('Explicit infrastructure adjudication required')
     expected=dict(config=Path(item['epoch']['campaign_config']['path']),attempt=item['path'],
-        acquisition=source.parent/'pipeline-acquisition.json',manifest=source/'manifest.json',
-        snapshot=source/'snapshot.json',evaluation_index=source/'evaluations/index.jsonl')
+        acquisition=source.parent/'pipeline-acquisition.json',manifest=source/'manifest.json')
+    optional=dict(snapshot=source/'snapshot.json',evaluation_index=source/'evaluations/index.jsonl')
+    if legacy:expected.update(optional)
+    else:
+        expected.update(runtime=source/'runtime.json',pair_journal=source.parent/'_control/pair-journal.jsonl')
+        for key,target in optional.items():
+            if key not in value or value[key]!=(live.reference(target) if target.exists() else None):
+                raise ValueError('Original optional evidence changed: '+key)
     for key,target in expected.items():
         if live.checked(value[key])!=target:raise ValueError('Foreign adjudication evidence: '+key)
     if (value['config']!=item['epoch']['campaign_config'] or value['attempt']!=live.reference(item['path'])):
         raise ValueError('Adjudication differs from its fixed campaign/attempt')
     acquisition=util.read_json(expected['acquisition']);manifest=util.read_json(expected['manifest'])
-    if (acquisition.get('acquired') is not True or acquisition.get('attempt')!=item['attempt']['attempt']
-            or acquisition.get('slot')!=item['attempt']['slot'] or manifest.get('submission_fixed') is not True):
-        raise ValueError('Completed original acquisition with fixed artifact required')
+    if (type(acquisition.get('acquired')) is not bool or acquisition.get('attempt')!=item['attempt']['attempt']
+            or acquisition.get('slot')!=item['attempt']['slot']):
+        raise ValueError('Bound original acquisition receipt required')
+    if not legacy:
+        runtime=util.read_json(expected['runtime']);journal=pair_execution.events(expected['pair_journal'])
+        current=pair_execution.state(expected['pair_journal'])
+        dispatch=current['dispatch'].get(case['run_id'],{})
+        if (set(current['dispatch'])!={case['run_id']} or any(dispatch.get(k)!=v for k,v in case.items())
+                or any(runtime.get(k)!=case[k] for k in ('run_id','run_instance_id'))):
+            raise ValueError('Original dispatch/runtime identity differs')
+        if any((e.get('row',{}).get('scoring') or {}).get('state')=='scored' for e in current['results'].values()):
+            raise ValueError('Recorded scored result cannot become an infrastructure exclusion')
+        if _ordinary_timeout([manifest,acquisition,runtime,journal]) or _product_failure([manifest,acquisition,runtime,journal]):
+            raise ValueError('Ordinary timeout/budget stop or product failure is not infrastructure retry authority')
+        observed=acquisition_pipeline.usage_for_manifests([source/'manifest.json'])
+        if observed['dispatched_runs']!=1 or acquisition.get('usage')!=observed:
+            raise ValueError('Original acquisition usage differs; retain and reconcile')
     pipeline_evaluation=source.parent/'pipeline-evaluation.json'
     if 'pipeline_evaluation' not in value or value['pipeline_evaluation']!=(
             live.reference(pipeline_evaluation) if pipeline_evaluation.exists() else None):
@@ -105,8 +136,48 @@ def evaluation_fault(item,source,adjudication,authorization_reference):
         if outcome.get('accepted') is not False or _product_failure(outcome):
             raise ValueError('Accepted or ambiguous evaluation cannot be excluded')
     index=evaluate.read_index(source)
-    if not index or any(r.get('adopted') is True or r.get('scoring_state')=='scored' or _product_failure(r) for r in index):
-        raise ValueError('Missing evaluation or retained scored/product result')
+    if any(r.get('adopted') is True or r.get('scoring_state')=='scored' or _product_failure(r) for r in index):
+        raise ValueError('Retained scored/product result')
+    # The same protection applies before evaluation and after an incomplete score.
+    for name in ('record.json','evaluation.json','results.jsonl'):
+        for saved in (source/'evaluations').rglob(name):
+            data=util.read_json(saved) if name.endswith('.json') else util.read_lines(saved)
+            if _product_failure(data) or (not legacy and _ordinary_timeout(data)):
+                raise ValueError('Retained product failure/timeout prevents infrastructure exclusion')
+    faults=value.get('fault_evidence')
+    if not isinstance(faults,list) or not faults:raise ValueError('Fixed original fault evidence required')
+    fault_paths={live.checked(ref) for ref in faults}
+    if any(not path.stat().st_size for path in fault_paths):raise ValueError('Empty original fault evidence')
+    evidence=dict(kind='adjudicated_evaluation_infrastructure_fault' if legacy else 'adjudicated_infrastructure_fault',
+        adjudication=adjudication,low_level_cause='unknown')
+    if not index:
+        if legacy or 'evaluation_record' not in value or value['evaluation_record'] is not None:
+            raise ValueError('Missing or unbound original evaluation record')
+        if any((source/'evaluations').rglob('*')):
+            raise ValueError('Unindexed evaluation evidence must remain held')
+        # A ruling supplies attribution; existing typed failure records supply the
+        # occurrence. No exception-class or OS error-number allowlist is used.
+        failure_paths=set()
+        error,fault=acquisition.get('error'),acquisition.get('fault')
+        if (isinstance(error,dict) and isinstance(error.get('type'),str) and error['type']
+                or isinstance(fault,dict) and isinstance(fault.get('reason'),str) and fault['reason']):
+            failure_paths.add(expected['acquisition'])
+        for event in journal:
+            receipt=event.get('receipt',{})
+            if (isinstance(event.get('error_type'),str) and event['error_type']
+                    or isinstance(receipt,dict) and any(isinstance(receipt.get(k),str) and receipt[k]
+                        for k in ('error_type','collection_error_type'))):
+                failure_paths.add(expected['pair_journal'])
+                if event.get('receipt_path'):failure_paths.add(Path(event['receipt_path']))
+        if not fault_paths & failure_paths:
+            raise ValueError('Fixed original acquisition/persistence failure record required')
+        allowed={expected['acquisition'],expected['pair_journal'],source.parent/'pipeline-evaluation.log'}|failure_paths
+        if any(path not in allowed and not path.is_relative_to(source/'evidence')
+                and not path.is_relative_to(source/'_controller') for path in fault_paths):
+            raise ValueError('Foreign original infrastructure fault evidence')
+        return evidence
+    if (acquisition.get('acquired') is not True or manifest.get('submission_fixed') is not True):
+        raise ValueError('Completed original acquisition with fixed artifact required')
     last=index[-1];record_path=live.checked(value['evaluation_record'])
     if 'directory' in last:
         directory=live.safe_path(source/last['directory'])
@@ -135,7 +206,7 @@ def evaluation_fault(item,source,adjudication,authorization_reference):
             or record.get('verdict') not in (None,'error')):
         raise ValueError('Bound non-timeout evaluator fault required; quality/product failure is not authority')
     condition=util.read_json(source/'condition.json');evaluation=condition['evaluation']
-    artifact=util.artifact_hash(source/'frozen');snapshot=util.read_json(expected['snapshot'])
+    artifact=util.artifact_hash(source/'frozen');snapshot=util.read_json(optional['snapshot'])
     if (snapshot.get('run_id')!=case['run_id'] or snapshot.get('artifact_sha256')!=artifact
             or record.get('artifact_sha256_outer')!=artifact
             or record.get('artifact_sha256_frozen')!=artifact
@@ -153,19 +224,10 @@ def evaluation_fault(item,source,adjudication,authorization_reference):
             raise ValueError('Unbound or non-error original evaluation output')
     elif record.get('evaluation_sha256') is not None:
         raise ValueError('Original evaluation output missing')
-    # Older attempts and HTTP-only results can contain a real failure even when
-    # the latest composition has null quality. Do not erase it via technical retry.
-    for name in ('evaluation.json','results.jsonl'):
-        for saved in (source/'evaluations').rglob(name):
-            data=util.read_json(saved) if name.endswith('.json') else util.read_lines(saved)
-            if _product_failure(data):raise ValueError('Retained product failure prevents evaluation exclusion')
-    faults=value.get('fault_evidence')
-    if not isinstance(faults,list) or not faults:raise ValueError('Fixed original fault evidence required')
     allowed={source/'evidence'/f'scoring-{record["sequence"]:03d}-{stream}.log' for stream in ('stdout','stderr')}
     allowed.add(source.parent/'pipeline-evaluation.log')
-    for ref in faults:
-        fault=live.checked(ref)
-        if (not fault.is_relative_to(directory) and fault not in allowed) or not fault.stat().st_size:
+    for fault in fault_paths:
+        if not fault.is_relative_to(directory) and fault not in allowed:
             raise ValueError('Foreign or empty original fault evidence')
     # Reuse recorded evaluator closure; no resource creation, cleanup or scoring.
     closure=browser_cleanup.latest(directory)
@@ -181,7 +243,7 @@ def evaluation_fault(item,source,adjudication,authorization_reference):
     for ownership in (source/'evaluations').rglob('browser-resources.json'):
         if not saved_reassessment._saved_cleanup_bound(ownership.parent,case['run_instance_id']):
             raise ValueError('Original evaluator resource closure is unconfirmed')
-    return dict(kind='adjudicated_evaluation_infrastructure_fault',adjudication=adjudication,low_level_cause='unknown')
+    return evidence
 
 
 def technical_reason(item,source,reason,adjudication=None,authorization_reference=None):
@@ -198,7 +260,7 @@ def technical_reason(item,source,reason,adjudication=None,authorization_referenc
         return dict(kind='controller_interrupted',cause='unknown',exit_code_inferred=False)
     if reason!='technical_failure':raise ValueError('Explicit technical exclusion reason required')
     if adjudication is not None:
-        return evaluation_fault(item,source,adjudication,authorization_reference)
+        return adjudicated_fault(item,source,adjudication,authorization_reference)
     classified=technical_retry.classify(source.parent)
     if classified:return dict(kind='existing_infrastructure_classifier',evidence=classified)
     path=source/'implementation-receipt.json'
@@ -404,7 +466,7 @@ def record_preparation_hold(config,item,source,error,authorization_reference):
         adopted=False,retry_authorized=False,at=run.now()))
 
 
-def exclude(repo,config_path,record,reason,authorization_reference,evaluation_adjudication=None):
+def exclude(repo,config_path,record,reason,authorization_reference,evaluation_adjudication=None,*,adjudication=None):
     """Append a factual exclusion under the existing owner locks; never resend."""
     if not isinstance(authorization_reference,str) or not authorization_reference.strip():
         raise ValueError('Existing user instruction reference required; never synthesize approval')
@@ -415,9 +477,12 @@ def exclude(repo,config_path,record,reason,authorization_reference,evaluation_ad
     if config['template'].get('staged_retry',{}).get('retry_budget')!='shared_reserved_attempts':
         raise ValueError('This narrow exclusion path requires the existing shared-attempt budget')
     root=Path(config['root']);item=_item(config,record);case=item['cases'][0];source=item['path'].parent/case['run_id']
+    if adjudication is not None:
+        if evaluation_adjudication is not None:raise ValueError('Supply one adjudication reference')
+        evaluation_adjudication=adjudication
     adjudication=live.reference(evaluation_adjudication) if evaluation_adjudication is not None else None
     if adjudication is not None and reason!='technical_failure':
-        raise ValueError('Evaluation adjudication requires technical_failure')
+        raise ValueError('Infrastructure adjudication requires technical_failure')
     manifest_path=source/'manifest.json'
     preparation=reason=='controller_interrupted'
     try:
@@ -449,7 +514,7 @@ def exclude(repo,config_path,record,reason,authorization_reference,evaluation_ad
                     raise ValueError('Existing exclusion changed; reconcile without dispatch')
                 if preparation:preparation_usage(item,source,receipt['evidence'])
                 elif adjudication is not None and technical_reason(item,source,reason,adjudication,authorization_reference)!=receipt['evidence']:
-                    raise ValueError('Evaluation adjudication evidence changed')
+                    raise ValueError('Infrastructure adjudication evidence changed')
             else:
                 evidence=observe_preparation(config,item,source) if preparation else technical_reason(
                     item,source,reason,adjudication,authorization_reference)
@@ -538,10 +603,10 @@ def main():
     parser.add_argument('--record',type=Path,required=True)
     parser.add_argument('--reason',choices=['controller_interrupted','technical_failure'],required=True)
     parser.add_argument('--authorization-reference',required=True)
-    parser.add_argument('--evaluation-adjudication',type=Path,
-        help='Existing private, evidence-bound ruling for a completed acquisition with an evaluator infrastructure fault')
+    parser.add_argument('--adjudication','--evaluation-adjudication',dest='adjudication',type=Path,
+        help='Existing private, evidence-bound ruling for an acquisition, persistence or evaluation infrastructure fault')
     args=parser.parse_args();guard().dependencies(args.repo)
-    print(json.dumps(exclude(args.repo,args.config,args.record,args.reason,args.authorization_reference,args.evaluation_adjudication)))
+    print(json.dumps(exclude(args.repo,args.config,args.record,args.reason,args.authorization_reference,adjudication=args.adjudication)))
 
 
 if __name__=='__main__':main()
