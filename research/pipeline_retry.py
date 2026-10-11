@@ -99,10 +99,29 @@ def _item(config,record):
     return item
 
 
+def preparation_execution_seen(source,manifest=None):
+    """One predicate for refusing an unsent claim and retaining that refusal."""
+    from outer.harness import util,live_usage
+    if manifest is None:
+        path=source/'manifest.json'
+        try:manifest=util.read_json(path) if path.exists() else {}
+        except (OSError,ValueError):return True
+    if not isinstance(manifest,dict):return True
+    staged,errors=live_usage.journal(source/'_controller/staged-input/events.jsonl')
+    journal,_=live_usage.journal(source.parent/'_control/pair-journal.jsonl')
+    return bool(any(manifest.get(k) is not None for k in ('started_at','ended_at','duration_seconds','native_session_id'))
+        or manifest.get('model_called') not in (None,False)
+        or util.tree_hashes(source/'usage/raw')
+        or any((source/name).exists() for name in EXECUTION_FILES)
+        or any((source/'snapshots').glob('*')) or errors
+        or any(e.get('kind')!='planned' for e in staged)
+        or any(e.get('kind')=='dispatch' for e in journal))
+
+
 def preparation_state(item,source):
     """Negative evidence only; an absent Run UUID is never supplied to a manifest."""
     from research import pair_execution,live_pilot as live
-    from outer.harness import util,live_usage
+    from outer.harness import util
     case=item['cases'][0];batch=source.parent;path=source/'manifest.json'
     campaign_root=Path(item['epoch']['campaign_config']['path']).parent
     for hold_path in (campaign_root/'_exclusion-holds'/case['run_instance_id']).glob('*.json'):
@@ -118,15 +137,15 @@ def preparation_state(item,source):
     if (current['dispatch'] or len(events)>1 or any(e['kind']!='pair_reserved' for e in events)
             or any(any(b.get(k)!=v for k,v in case.items()) for b in current['reserved'].values())
             or set(current['reserved']) not in (set(),{case['run_id']})):
-        raise ValueError('Dispatch or ambiguous preparation journal; not proven unsent')
-    staged,errors=live_usage.journal(source/'_controller/staged-input/events.jsonl')
-    if (any(manifest.get(k) is not None for k in ('started_at','ended_at','duration_seconds','native_session_id'))
-            or manifest.get('model_called') not in (None,False)
-            or util.tree_hashes(source/'usage/raw')
-            or any((source/name).exists() for name in EXECUTION_FILES)
-            or any((source/'snapshots').glob('*')) or errors
-            or any(e.get('kind')!='planned' for e in staged)):
-        raise ValueError('Runtime/request or ambiguous execution evidence; not proven unsent')
+        error=ValueError('Dispatch or ambiguous preparation journal; not proven unsent')
+        error.execution_evidence_seen=bool(current['dispatch'])
+        raise error
+    if preparation_execution_seen(source,manifest):
+        error=ValueError('Runtime/request or ambiguous execution evidence; not proven unsent')
+        # Preserve the observed decision even if files disappear before the
+        # exception handler writes the hold receipt after releasing its locks.
+        error.execution_evidence_seen=True
+        raise error
     invocation=batch/'pair-invocation.json'
     if invocation.exists():
         value=util.read_json(invocation)
@@ -241,7 +260,6 @@ def record_preparation_hold(config,item,source,error,authorization_reference):
     ids=[row.get('request_id') for row in rows]
     distinct=all(isinstance(i,str) and i for i in ids) and len(set(ids))==len(ids)
     raw=util.tree_hashes(source/'usage/raw')
-    journal,_=live_usage.journal(source.parent/'_control/pair-journal.jsonl')
     path=Path(config['root'])/'_exclusion-holds'/item['cases'][0]['run_instance_id']/(uuid.uuid4().hex+'.json')
     util.write_new_json(path,dict(kind='pipeline_preparation_exclusion_held_v1',attempt=live.reference(item['path']),
         reason=type(error).__name__+': '+str(error),authorization_reference=authorization_reference,
@@ -249,9 +267,8 @@ def record_preparation_hold(config,item,source,error,authorization_reference):
             observed_tokens_lower_bound=sum(components) if components and distinct and not row_errors else None,
             observed_token_components=components,
             totals_unknown=True,journal_errors=start_errors+row_errors),
-        raw_usage=raw,execution_evidence_seen=bool(raw or any((source/name).exists() for name in EXECUTION_FILES)
-            or any(row.get('kind')=='dispatch' for row in journal)
-            or getattr(error,'execution_evidence_seen',False)),
+        raw_usage=raw,execution_evidence_seen=bool(getattr(error,'execution_evidence_seen',False)
+            or preparation_execution_seen(source)),
         adopted=False,retry_authorized=False,at=run.now()))
 
 

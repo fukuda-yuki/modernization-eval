@@ -119,6 +119,46 @@ class PreparationRetryTests(unittest.TestCase):
         # Deleting later-observed evidence cannot turn its retained cost into 0.
         self.assertIn('Previously observed execution',self.held()['reason'])
 
+    def assert_retained_execution_hold(self,remove):
+        value=self.held()
+        self.assertTrue(value['execution_evidence_seen'])
+        self.assertTrue(value['known_usage']['totals_unknown'])
+        remove()
+        self.assertIn('Previously observed execution',self.held()['reason'])
+        self.assertEqual(sum(e['kind']=='reserved' for e in pair_execution.events(self.root/'events.jsonl')),1)
+
+    def test_native_session_only_refusal_survives_later_manifest_evidence_loss(self):
+        util.write_json_atomic(self.source/'manifest.json',dict(self.manifest,native_session_id='synthetic-native'))
+        self.assert_retained_execution_hold(lambda:util.write_json_atomic(self.source/'manifest.json',self.manifest))
+
+    def test_model_called_only_refusal_survives_later_manifest_evidence_loss(self):
+        util.write_json_atomic(self.source/'manifest.json',dict(self.manifest,model_called=True))
+        self.assert_retained_execution_hold(lambda:util.write_json_atomic(self.source/'manifest.json',self.manifest))
+
+    def test_staged_delivery_refusal_survives_later_ledger_loss(self):
+        path=self.source/'_controller/staged-input/events.jsonl'
+        util.append_line(path,dict(kind='acknowledged'))
+        self.assert_retained_execution_hold(path.unlink)
+
+    def test_snapshot_refusal_survives_later_snapshot_loss(self):
+        path=self.source/'snapshots/checkpoint.json';util.write_new_json(path,dict(synthetic=True))
+        self.assert_retained_execution_hold(path.unlink)
+
+    def test_execution_decision_is_latched_before_the_hold_writer_rereads_files(self):
+        util.write_json_atomic(self.source/'manifest.json',dict(self.manifest,native_session_id='synthetic-native'))
+        actual=retry.record_preparation_hold
+        def write(*args):
+            util.write_json_atomic(self.source/'manifest.json',self.manifest)
+            return actual(*args)
+        with patch.object(retry,'record_preparation_hold',side_effect=write):value=self.held()
+        self.assertTrue(value['execution_evidence_seen'])
+        self.assertIn('Previously observed execution',self.held()['reason'])
+
+    def test_planned_only_staged_input_remains_eligible_for_unsent_exclusion(self):
+        util.append_line(self.source/'_controller/staged-input/events.jsonl',dict(kind='planned'))
+        ref=self.exclude()
+        self.assertEqual(util.read_json(ref['path'])['budget_usage']['requests'],0)
+
     def test_unreadable_manifest_is_held_with_known_components(self):
         (self.source/'manifest.json').write_text('{')
         util.append_line(self.source/'usage/raw/events.jsonl',dict(request_id='known',
