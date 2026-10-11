@@ -141,6 +141,12 @@ class PairWatch(live_pilot.PilotWatch):
         super().__init__(plan, digest)
         self.budget, self.identity = budget, identity
 
+    def stop_receipt_path(self):
+        # Separate acquisition owners share the epoch, not an exclusive receipt.
+        import hashlib
+        owner = hashlib.sha256(self.identity.encode('utf-8')).hexdigest()
+        return self.base/'_control'/'acquisitions'/owner/'stop-receipt.json'
+
     def _check_locked(self):
         if self.fault: raise RuntimeError('Pair acquisition fault: '+self.fault['reason'])
         if self.source_repo: live_pilot.verify_pins(self.source_repo, self.plan['source_pins'])

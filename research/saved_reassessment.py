@@ -1,7 +1,8 @@
 """Run a repaired evaluator on a saved artifact in an independent assessment.
 
 This is not acquisition: it never calls a provider and never writes a Run index.
-Only the explicit new specification is accepted; old contracts are not relabeled.
+New specifications and explicitly pinned same-spec observation revisions are
+separate paths; old contracts and original Run indexes are never relabeled.
 The existing no-network evaluator container and isolated browser path are reused.
 """
 import argparse
@@ -37,17 +38,20 @@ def requirement_inventory(spec):
             for r in spec['requirements']]
 
 
-def controller_inventory(repo):
+def controller_inventory(repo, *, observation=False):
     repo = Path(repo).resolve()
     paths = list((repo/'outer/harness').glob('*.py')) + list((repo/'inner/browser').glob('*.cjs'))
     paths += [repo/'research/saved_reassessment.py', repo/'research/repair_spec.py']
+    if observation:
+        paths += [repo/'research'/name for name in ('observation_revision.py', 'repaired_runtime.py',
+                                                  'catalog_environment.py', 'live_pilot.py')]
     if not paths or any(not p.is_file() for p in paths):
         raise ValueError('Assessment requires its actual controller source tree')
     return {p.relative_to(repo).as_posix(): util.sha256_file(p) for p in sorted(paths)}
 
 
 def prepare(*, source, destination, evaluator_bundle, assembly, spec,
-            evaluation_version, repair_contract):
+            evaluation_version, repair_contract, observation_plan=None):
     source, destination = Path(source).resolve(), Path(destination).resolve()
     bundle, spec = Path(evaluator_bundle).resolve(), Path(spec).resolve()
     if _inside(destination, source) or _inside(source, destination):
@@ -56,6 +60,21 @@ def prepare(*, source, destination, evaluator_bundle, assembly, spec,
         raise ValueError('Expected one evaluator DLL filename')
     manifest = util.read_json(source/'manifest.json')
     condition = util.read_json(source/'condition.json')
+    observation = None
+    if observation_plan is not None:
+        from research import observation_revision
+        if not isinstance(observation_plan, dict):
+            from research.live_pilot import reference
+            observation_plan = reference(Path(observation_plan).resolve())
+        observation = observation_revision.selected_source(Path(__file__).resolve().parents[1], observation_plan, source)
+        plan, selected, family, entry = observation
+        observation_revision.validate_destination(Path(__file__).resolve().parents[1], plan, destination,
+                                                   plan_ref=observation_plan)
+        if (bundle != Path(entry['bundle']).resolve() or assembly != family['assembly']
+                or repair_contract != observation_revision.REVISION
+                or evaluation_version != family['version']
+                or util.sha256_file(spec) != condition['evaluation']['spec_sha256']):
+            raise ValueError('Observation revision must use its exact accepted bundle and unchanged spec')
     if condition.get('schema_version') != 2:
         raise ValueError('Only frozen isolated schema-2 Runs are supported')
     profiles.validate_run(source)
@@ -66,7 +85,7 @@ def prepare(*, source, destination, evaluator_bundle, assembly, spec,
         raise ValueError('Source acquisition must be stopped and fixed')
     if not re.fullmatch(r'[0-9a-f]{32}', manifest.get('run_instance_id', '')) or not repair_contract:
         raise ValueError('Source UUID and explicit repair contract are required')
-    if (evaluation_version == condition['evaluation']['evaluation_version']
+    if ((evaluation_version == condition['evaluation']['evaluation_version'] and observation is None)
             or new_spec.get('specVersion') != evaluation_version):
         raise ValueError('An explicit new matching evaluation/spec version is required')
     if (new_spec.get('taskId') != original_spec.get('taskId')
@@ -87,7 +106,9 @@ def prepare(*, source, destination, evaluator_bundle, assembly, spec,
     if assembly not in build_inventory:
         raise ValueError('Repaired evaluator bundle is missing its DLL')
     assessment_id = uuid.uuid4().hex
-    stage = destination/assessment_id
+    # One prepared observation per selected UUID in this output. An interrupted
+    # or duplicate invocation cannot silently allocate a replacement assessment.
+    stage = destination/(manifest['run_instance_id'] if observation else assessment_id)
     stage.mkdir(parents=True, exist_ok=False)
     # Source remains untouched. A fresh work DB is initialized from copied assets.
     shutil.copytree(source/'frozen', stage/'frozen')
@@ -95,6 +116,10 @@ def prepare(*, source, destination, evaluator_bundle, assembly, spec,
         ignore=lambda directory, names: ['evaluator']
         if Path(directory).resolve() == source/'evaluation-assets' else [])
     shutil.copytree(bundle, stage/'evaluation-assets/evaluator')
+    if observation and 'build-receipt.json' not in build_inventory:
+        from research.live_pilot import checked
+        shutil.copyfile(checked(entry['build_receipt']), stage/'evaluation-assets/evaluator/build-receipt.json')
+        build_inventory = byte_inventory(stage/'evaluation-assets/evaluator')
     shutil.copyfile(spec, stage/'evaluation-assets/requirements.json')
     copied_assets = byte_inventory(stage/'evaluation-assets')
     for name, digest in before.items():
@@ -111,9 +136,12 @@ def prepare(*, source, destination, evaluator_bundle, assembly, spec,
             'source': 'assessment-bound repaired bundle; original build remains in source condition'})
     new_condition['runtime_lock'].update(evaluator_sha256=build_inventory[assembly],
         evaluator_build=new_condition['evaluation']['evaluator_build'],
-        evaluator_files={name: {'sha256': sha, 'bytes': (bundle/name).stat().st_size}
+        evaluator_files={name: {'sha256': sha, 'bytes': (stage/'evaluation-assets/evaluator'/name).stat().st_size}
                          for name, sha in build_inventory.items()})
-    controllers = controller_inventory(Path(__file__).resolve().parents[1])
+    if observation:
+        new_condition['evaluation']['evaluator_build']['observation_revision'] = plan['revision']
+        new_condition['runtime_lock']['images'] = dict(entry['images'])
+    controllers = controller_inventory(Path(__file__).resolve().parents[1], observation=observation is not None)
     new_condition['runtime_lock']['controller_files'] = controllers
     # This is assessment execution configuration, never a new acquisition condition.
     util.write_new_json(stage/'execution-config.json', new_condition)
@@ -131,6 +159,9 @@ def prepare(*, source, destination, evaluator_bundle, assembly, spec,
         'assessment_assets_inventory': byte_inventory(stage/'evaluation-assets'),
         'controller_inventory': controllers,
         'scope': 'fresh evaluation of saved artifact; not historical action reconstruction'}
+    if observation:
+        record.update(observation_revision=observation_revision.REVISION, observation_plan=observation_plan,
+                      source_evaluation=selected['evaluation'], source_evaluation_id=selected['evaluation_id'])
     util.write_new_json(stage/'assessment.json', record)
     if byte_inventory(source) != before or util.artifact_hash(stage/'frozen') != artifact:
         raise RuntimeError('Source changed while assessment inputs were copied; do not execute')
@@ -138,6 +169,33 @@ def prepare(*, source, destination, evaluator_bundle, assembly, spec,
 
 
 def execute(stage, *, repo, timeout=1800):
+    if not 1 <= timeout <= 1800:
+        raise ValueError('Assessment timeout must be finite and at most 1800 seconds')
+    assessment = util.read_json(Path(stage)/'assessment.json')
+    config = util.read_json(Path(stage)/'execution-config.json')
+    if (config['evaluation'].get('evaluator_build', {}).get('observation_revision')
+            and 'observation_plan' not in assessment):
+        raise ValueError('Observation build requires its selected plan at execution')
+    if 'observation_plan' in assessment:
+        from research import observation_revision, catalog_environment, live_pilot
+        plan = observation_revision.validate_assessment(repo, stage, assessment)
+        if (Path(stage)/'output').exists() or (Path(stage)/'evaluator-runtime-probe.json').exists():
+            raise FileExistsError('Retain existing assessment execution/probe; no implicit retry')
+        image = config['runtime_lock']['images']['evaluator']
+        if runtime.image_id(image) != image:
+            raise ValueError('Observation evaluator image identity mismatch')
+        sdk = runtime.docker('run', '--rm', '--network', 'none', image, 'dotnet', '--version').stdout.strip()
+        if sdk != '8.0.425':
+            raise ValueError('Observation evaluator requires the pinned SDK 8.0.425')
+        util.write_new_json(Path(stage)/'evaluator-runtime-probe.json',
+            {'image':image,'dotnet':sdk,'model_called':False})
+        browser = util.read_json(live_pilot.checked(plan['browser_pin']))
+        with catalog_environment.activated(browser, repo):
+            return _execute(stage, repo=repo, timeout=timeout)
+    return _execute(stage, repo=repo, timeout=timeout)
+
+
+def _execute(stage, *, repo, timeout=1800):
     stage, repo = Path(stage).resolve(), Path(repo).resolve()
     if not 1 <= timeout <= 1800:
         raise ValueError('Assessment timeout must be finite and at most 1800 seconds')
@@ -145,7 +203,7 @@ def execute(stage, *, repo, timeout=1800):
     source = Path(assessment['source_path_private']).resolve()
     if _inside(stage, source) or _inside(source, stage):
         raise ValueError('Assessment execution must remain outside the original Run')
-    if controller_inventory(repo) != assessment['controller_inventory']:
+    if controller_inventory(repo, observation='observation_plan' in assessment) != assessment['controller_inventory']:
         raise ValueError('Assessment controller differs from its prepared source bytes')
     if byte_inventory(source) != assessment['source_byte_inventory']:
         raise ValueError('Original changed since preparation')
@@ -160,6 +218,10 @@ def execute(stage, *, repo, timeout=1800):
     record = {'schema_version': 1, 'assessment_id': assessment['assessment_id'],
               'operation_status': 'not_completed', 'adopted': False, 'quality': None,
               'source_unchanged': None, 'cleanup_confirmed': False, 'errors': []}
+    if 'observation_plan' in assessment:
+        record.update({key: assessment[key] for key in ('observation_revision', 'observation_plan',
+            'source_run_id', 'source_run_instance_id', 'source_evaluation', 'source_evaluation_id')})
+        record['evaluator_runtime_probe_sha256'] = util.sha256_file(stage/'evaluator-runtime-probe.json')
     if (stage/'STOP').exists():
         record.update(operation_status='stopped_before_execution', source_unchanged=True)
         util.write_new_json(stage/'result.json', record)
@@ -294,6 +356,15 @@ def revalidate(stage, destination, *, repo=None):
     if (_inside(stage, source) or _inside(source, stage)
             or _inside(destination, source) or _inside(destination, stage)):
         raise ValueError('Validation receipt must remain outside source and assessment roots')
+    # This is outside the receipt-producing try/finally: even invalid evidence
+    # must never write a failure receipt into another selected Run or its inputs.
+    if 'observation_plan' in assessment:
+        from research import observation_revision, live_pilot
+        plan = util.read_json(live_pilot.checked(assessment['observation_plan']))
+        observation_revision.validate_destination(repo, plan, destination,
+                                                   plan_ref=assessment['observation_plan'])
+    elif assessment.get('observation_revision'):
+        raise ValueError('Observation validation requires its selected plan before any receipt')
     if destination.exists(): raise FileExistsError(destination)
     receipt = {'schema_version':1, 'kind':'saved_assessment_read_only_validation',
         'validation_id':uuid.uuid4().hex, 'assessment_id':assessment['assessment_id'],
@@ -303,7 +374,7 @@ def revalidate(stage, destination, *, repo=None):
         'observer_fault':None, 'observer_faults':None,
         'finite_failure_scope':'Bound reported requirement labels; not proof that every dependent operation was observed.',
         'evaluation_controller_inventory':assessment.get('controller_inventory'),
-        'validation_controller_inventory':controller_inventory(repo), 'errors':[]}
+        'validation_controller_inventory':controller_inventory(repo, observation='observation_plan' in assessment), 'errors':[]}
     receipt['evaluation_controller_matches_current'] = (
         receipt['evaluation_controller_inventory'] == receipt['validation_controller_inventory'])
     receipt['validation_implementation_sha256'] = util.sha256_file(Path(__file__).resolve())
@@ -316,6 +387,9 @@ def revalidate(stage, destination, *, repo=None):
         source_before, stage_before = byte_inventory(source), byte_inventory(stage)
         require(source_before == assessment['source_byte_inventory'], 'source_byte_inventory')
         profiles.validate_run(source)
+        if 'observation_plan' in assessment:
+            from research import observation_revision
+            observation_revision.validate_assessment(repo, stage, assessment)
         source_manifest, snapshot = util.read_json(source/'manifest.json'), util.read_json(source/'snapshot.json')
         require(source_manifest.get('stop_confirmed') is True and source_manifest.get('submission_fixed') is True,
                 'source_stop_and_fixed')
@@ -327,7 +401,8 @@ def revalidate(stage, destination, *, repo=None):
         require(source_condition['evaluation']['evaluation_version'] == assessment['source_evaluation_version']
                 and source_condition['evaluation']['spec_sha256'] == assessment['source_spec_sha256']
                 == util.sha256_file(source/'evaluation-assets/requirements.json')
-                and assessment['evaluation_version'] != assessment['source_evaluation_version'], 'source_evaluation_contract')
+                and (assessment['evaluation_version'] != assessment['source_evaluation_version']
+                     or 'observation_plan' in assessment), 'source_evaluation_contract')
         require(assessment.get('kind') == 'saved_artifact_reassessment'
                 and assessment.get('acquisition_count_increment') == 0
                 and re.fullmatch(r'[0-9a-f]{32}', assessment['assessment_id']) is not None, 'assessment_identity')
@@ -350,6 +425,16 @@ def revalidate(stage, destination, *, repo=None):
         spec = util.read_json(spec_path)
         require(spec['specVersion'] == assessment['evaluation_version'] and spec['taskId'] == condition['task_id'], 'spec_identity')
         original = util.read_json(stage/'result.json')
+        if 'observation_plan' in assessment:
+            probe = util.read_json(stage/'evaluator-runtime-probe.json')
+            require(probe == {'image':condition['runtime_lock']['images']['evaluator'],
+                              'dotnet':'8.0.425','model_called':False}
+                    and original.get('evaluator_runtime_probe_sha256') == util.sha256_file(stage/'evaluator-runtime-probe.json')
+                    and all(original.get(k) == assessment[k] for k in ('observation_revision','observation_plan',
+                        'source_run_id','source_run_instance_id','source_evaluation','source_evaluation_id')),
+                    'observation_revision_execution_binding')
+            receipt.update({key: assessment[key] for key in ('observation_revision','observation_plan',
+                                                            'source_evaluation','source_evaluation_id')})
         receipt['original_result_sha256'] = util.sha256_file(stage/'result.json')
         require(original.get('assessment_id') == assessment['assessment_id']
                 and original.get('cleanup_confirmed') is True and original.get('source_unchanged') is True
@@ -432,6 +517,7 @@ def main():
     prep = sub.add_parser('prepare')
     for name in ('source', 'destination', 'evaluator-bundle', 'assembly', 'spec', 'evaluation-version', 'repair-contract'):
         prep.add_argument('--'+name, required=True)
+    prep.add_argument('--observation-plan', help='Hash-bound selected same-spec revision plan; never inferred from a version')
     run = sub.add_parser('execute'); run.add_argument('stage'); run.add_argument('--repo', required=True)
     run.add_argument('--timeout', type=int, default=1800)
     validation = sub.add_parser('revalidate', help='Read saved evidence; write a new separate validation receipt')

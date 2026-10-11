@@ -34,6 +34,7 @@ class Monitor(ProcessMonitor):
     def __init__(self,directory):
         self.directory=directory;directory.mkdir()
         self.session=directory.name;self.digest='a'*64;self.generation=2
+        self.acknowledged_generation=2
         self.process=Process();self.log=Mock();self.last_scope={'bindings':[]}
         self.requested_scope=self.last_scope;self.scope_provider=lambda:{'dispatched':[]}
         self.exit_code=0;self.on_stop=lambda:None

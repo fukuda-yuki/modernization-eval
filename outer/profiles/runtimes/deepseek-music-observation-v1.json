@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "id": "deepseek-music-observation-v1",
+  "artifact_namespace": "music-observation-runtime-20261011",
+  "model_id": "deepseek-v4.1-flash",
+  "provider": "opencode-go",
+  "endpoint": "https://opencode.ai/zen/go/v1/chat/completions",
+  "opencode_version": "1.17.11",
+  "timeout_seconds": 1800,
+  "provider_timeout_seconds": 600,
+  "model_context_tokens": 1000000,
+  "model_output_tokens": 32768,
+  "concurrency": 1,
+  "input_mount": "/inputs",
+  "prompt_transport": "stdin",
+  "compaction": {
+    "auto": true,
+    "prune": false
+  },
+  "subagents": false
+}

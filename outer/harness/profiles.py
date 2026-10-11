@@ -50,9 +50,9 @@ def resolve(repo, task_id, intervention_id, runtime_id='deepseek', *, task_revis
     runtime = read(repo, 'runtimes', runtime_id)
     if task['task_id'] != task_id or intervention['id'] != intervention_id or runtime['id'] != runtime_id:
         raise ValueError('Profile identity mismatch')
-    if intervention['method'] not in ('explore', 'preload', 'explained', 'staged-explore', catalog_input.METHOD):
+    if intervention['method'] not in ('explore', 'preload', 'explained', 'staged-explore', 'explore-observed', catalog_input.METHOD):
         raise ValueError('Unsupported intervention method')
-    if intervention['method'] == 'staged-explore' and (runtime.get('prompt_transport') != 'stdin' or runtime.get('opencode_version') != '1.17.11'):
+    if intervention['method'] in ('staged-explore', 'explore-observed') and (runtime.get('prompt_transport') != 'stdin' or runtime.get('opencode_version') != '1.17.11'):
         raise ValueError('Staged exploration requires the fixed stdin-capable OpenCode runtime')
     if intervention['method'] == catalog_input.METHOD:
         if (type(intervention.get('append_source_packet')) is not bool
@@ -178,15 +178,12 @@ def create(repo, runs_dir, task_id, intervention, attempt, runtime_id='deepseek'
     if condition['intervention']['method'] == catalog_input.METHOD:
         inputs.update(catalog_input.prepare(repo, source))
         condition['input_policy']['allowlist'] += ['catalog-derived', 'catalog-tools']
-    staged = condition['intervention']['method'] == 'staged-explore'
+    staged = condition['intervention']['method'] in ('staged-explore', 'explore-observed')
     if staged != (staged_plan is not None):
         raise ValueError('Staged condition and explicitly pinned request partition must agree')
     if staged:
         from . import staged_input
-        initial, additional, partition = staged_input.request_partition(condition['migration_request'], staged_plan)
-        prompt, context = prepare_prompt({**condition, 'migration_request':initial}, source)
-        partition = {**partition, 'request_initial_sha256':partition['initial_sha256'],
-                     'initial_sha256':util.sha256_bytes(prompt.encode())}
+        prompt, context, additional, partition = staged_input.prepare_presentation(condition, staged_plan, source)
     else:
         prompt, context = prepare_prompt(condition, source, inputs.get('catalog-derived'))
     if 'catalog-derived' in inputs:

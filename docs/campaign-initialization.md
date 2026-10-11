@@ -4,6 +4,10 @@
 この入口は既存Run部品による1条件または2条件の割付を扱い、条件・モデル・件数を提案しない。
 旧新100の `initialize(repo, summary_path, root)` と既存 `run config.json` は保持する。
 public Release は取得 admission の条件ではなく、解消済みの gate を追加しない。
+同一specの新観測buildを受入・本取得・保存成果物再評価で共通利用する場合は、
+[観測revisionと共通bundle](observation-reassessment.md)の明示bindingを用いる。
+追加0/1回の観測条件を混在させる限定kindと固定割付は
+[observed presentation](observed-presentation.md)を参照する。
 
 ## 初期化
 
@@ -44,7 +48,10 @@ clean commit、承認hash、入力計画、固定資材の検証後に、空の 
 再試行し、取得できた生成物の評価障害は保存物の復旧へ送る。低品質は保持・採用され、品質に
 基づく取り直しをしない。未知send/中断取得は資源回収を確認するまで停止する。
 
-段階入力は1条件のkindだけで扱い、`staged_inputs` と `staged_retry` の両方を追加する。
+段階入力は1 Run/割付のkindで扱い、`staged_inputs` と `staged_retry` の両方を追加する。
+従来の単一条件kindは全割付の条件一致を維持する。新しい
+`approved_observed_presentation_campaign_v1` だけが `presentation_allocation` に固定された
+`staged-explore` / `explore-observed` の混在を扱う。通常exploreを別名で追加条件に見せない。
 `staged_inputs` は全taskのpartitionファイルへのpath/hash参照。元の最終要求、section全文、
 初回/追加section ID、境界transportとsnapshot policyを固定し、workerへ渡すのは初回分だけ。
 公開リポジトリへ実partition本文や承認receiptを追加しない。

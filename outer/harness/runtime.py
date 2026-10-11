@@ -463,7 +463,7 @@ def _start(repo, runs_dir, run_id):
         path = root/'_controller/staged-input/contract.json'
         if (Path(ref['contract_path']).resolve() != path.resolve()
                 or util.sha256_file(path) != ref['contract_sha256']
-                or condition['intervention']['method'] != 'staged-explore'):
+                or condition['intervention']['method'] not in ('staged-explore', 'explore-observed')):
             raise ValueError('Staged contract/condition mismatch')
         stage = staged_input.Controller(path.parent)
         if (stage.contract['run_instance_id'] != manifest['run_instance_id']
@@ -475,7 +475,7 @@ def _start(repo, runs_dir, run_id):
             raise ValueError('Staged artifact collection policy differs from fixed condition')
         stage.audit_mounts()
         staged_runtime.validate_authorization(repo,root,manifest,stage,condition)
-    elif condition['intervention']['method'] == 'staged-explore':
+    elif condition['intervention']['method'] in ('staged-explore', 'explore-observed'):
         raise ValueError('Staged condition requires its frozen controller contract')
     lock = condition['runtime_lock']
     for digest in lock['images'].values():

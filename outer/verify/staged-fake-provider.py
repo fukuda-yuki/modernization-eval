@@ -27,7 +27,7 @@ class Provider(BaseHTTPRequestHandler):
             program="import subprocess;from pathlib import Path;Path('/workspace/Program.cs').write_text('// first');subprocess.Popen(['sh','-c','sleep 60; printf late > /workspace/Late.cs'],start_new_session=True,stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)"
             import shlex
             calls=[tool(0,'bash',{'command':'python3 -c '+shlex.quote(program),'description':'Synthetic detached child lifetime fixture'})]
-        elif count<=2:
+        elif ('early' not in scenario and count <= (1 if 'no-post-change' in scenario else 3 if 'continue' in scenario else 2)):
             calls=[tool(0,'write',{'filePath':'/workspace/Program.cs','content':'// synthetic stage '+str(count)+'\n'})]
             if 'archive-failure' in scenario:
                 command=("printf synthetic > /workspace/example.sqlite; printf unsealed > /workspace/example.sqlite-wal"

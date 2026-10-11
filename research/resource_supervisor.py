@@ -76,6 +76,9 @@ def load_monitor(phase):
     spec.loader.exec_module(module)
     if (module.CADENCE_SECONDS, module.STALE_SECONDS) != (10, 30):
         raise ValueError('Existing cadence/deadline required')
+    if (phase.get('cases_per_assignment') == 1
+            and 1 not in getattr(module.ResourceMonitor, 'SUPPORTED_RUN_COUNTS', ())):
+        raise ValueError('Pinned collector must explicitly support a one-Run scope')
     return module.ResourceMonitor
 
 
@@ -194,6 +197,7 @@ class ProcessMonitor:
         self.scope_provider = scope_provider
         self.session = self.directory.name
         self.generation = 0
+        self.acknowledged_generation = 0
         self.last_scope = None
         self.requested_scope = None
         self.process = None
@@ -266,6 +270,7 @@ class ProcessMonitor:
                         or value_ack.get('accepted') is not True):
                     raise ValueError('Invalid observer enrollment ACK')
                 self.last_scope = value
+                self.acknowledged_generation = self.generation
                 return
             if self.process.poll() is not None:
                 break
@@ -332,18 +337,23 @@ class ProcessMonitor:
     def stop(self):
         if self.process is None:
             return False
-        scope = self.last_scope or self.requested_scope
+        scope = self.last_scope
         if scope is None:
+            self._terminate_unstarted_observer()
             return False
+        generation = self.acknowledged_generation
         request = self.directory / 'shutdown.json'
         if not request.exists():
             util.write_new_json(request, {'session': self.session,
-                'phase_sha256': self.digest, 'generation': self.generation,
+                'phase_sha256': self.digest, 'generation': generation,
                 'dispatched': sorted(set(self.scope_provider()['dispatched']) &
                     {b['run_id'] for b in scope['bindings']})})
         deadline = time.monotonic() + 15
         while self.process.poll() is None and time.monotonic() < deadline:
             time.sleep(.05)
+        if self.process.poll() is None:
+            self._terminate_unstarted_observer()
+            return False
         self.log.close()
         ack = self.directory / 'shutdown-ack.json'
         if self.process.poll() != 0 or not ack.exists():
@@ -351,7 +361,47 @@ class ProcessMonitor:
         value = util.read_json(ack)
         return bool(value.get('owned_resources_resolved') is True
             and value.get('monitor_stop_confirmed') is True and value.get('session') == self.session
-            and value.get('phase_sha256') == self.digest and value.get('generation') == self.generation)
+            and value.get('phase_sha256') == self.digest and value.get('generation') == generation)
+
+    def _terminate_unstarted_observer(self):
+        """Reap only this Popen handle, and only with no possibly dispatched Run.
+
+        A rejected/pending enrollment must not leak its observer. Active or
+        ambiguous ownership retains the independent fence; no ACK is invented.
+        """
+        scope = self.scope_provider()
+        if scope['dispatched']:
+            return False
+        phase = util.read_json(self.phase_path)
+        bindings = list(scope['assignments'])
+        bindings += (self.last_scope or {}).get('bindings', [])
+        bindings += (self.requested_scope or {}).get('bindings', [])
+        for binding in bindings:
+            root = (Path(phase['batch']) / binding['run_id']).resolve()
+            if not root.is_relative_to(Path(phase['batch']).resolve()):
+                return False
+            if (root / 'runtime.json').exists():
+                return False
+            manifest = util.read_json(root / 'manifest.json')
+            if (manifest.get('started_at') or any(manifest.get(k) != binding[k]
+                    for k in ('run_id', 'run_instance_id'))):
+                return False
+        try:
+            if self.process.poll() is None:
+                self.process.terminate()
+            self.process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            self.process.kill()
+            self.process.wait(timeout=5)
+        finally:
+            self.log.close()
+        util.write_new_json(self.directory / 'forced-process-stop.json', {
+            'session': self.session, 'phase_sha256': self.digest,
+            'requested_generation': self.generation,
+            'acknowledged_generation': self.acknowledged_generation,
+            'observer_pid': self.process.pid, 'observer_exit_code': self.process.returncode,
+            'no_dispatch_verified': True, 'normal_shutdown_ack': False, 'at': now()})
+        return True
 
 
 class Supervisor:
@@ -560,7 +610,6 @@ class Supervisor:
         """Potentially blocking validation/monitor lock/Docker checks stay off timer."""
         while not self.status_done.is_set():
             try:
-                self.enroll()
                 shutdown = self.directory / 'shutdown.json'
                 if shutdown.exists():
                     request = util.read_json(shutdown)
@@ -576,6 +625,8 @@ class Supervisor:
                         self.shutdown_done.set()
                         return
                     self.latch('shutdown_owned_resources_unresolved')
+                else:
+                    self.enroll()
             except Exception as exc:
                 self.latch('scope_or_shutdown_' + type(exc).__name__)
             self.status_done.wait(.1)

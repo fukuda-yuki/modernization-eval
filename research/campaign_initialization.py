@@ -14,6 +14,7 @@ from research import live_pilot
 
 KIND = 'approved_acquisition_campaign_v1'
 SINGLE_KIND = 'approved_single_condition_campaign_v1'
+MIXED_KIND = 'approved_observed_presentation_campaign_v1'
 FIELDS = {'kind', 'campaign_id', 'output_root', 'pair_count', 'pair_concurrency',
           'assignments', 'runtime_by_task', 'task_revision', 'bounds', 'settings',
           'protected_roots', 'resource_monitor', 'resource_probe', 'browser_pin',
@@ -34,11 +35,17 @@ def read_approved(plan_ref, approval_ref):
 
 
 def validate(plan, repo):
-    extra = set(plan)-FIELDS-{'resource_origin'}
+    mixed = plan.get('kind') == MIXED_KIND
+    extra = set(plan)-FIELDS-{'resource_origin'}-({'presentation_allocation'} if mixed else set())
     if (not FIELDS <= set(plan) or extra not in (set(), STAGED_FIELDS)
-            or plan.get('kind') not in (KIND, SINGLE_KIND)):
+            or plan.get('kind') not in (KIND, SINGLE_KIND, MIXED_KIND)):
         raise ValueError('Explicit fresh campaign fields required; no inherited template/history')
-    width = 1 if plan['kind'] == SINGLE_KIND else 2
+    width = 2 if plan['kind'] == KIND else 1
+    if mixed:
+        from research import presentation_allocation
+        presentation_allocation.validate(plan.get('presentation_allocation',{}),plan['assignments'])
+        if extra != STAGED_FIELDS or plan['pair_count']!=100:
+            raise ValueError('Observed mixed cohort requires 100 frozen single-case assignments')
     if 'resource_origin' in plan:
         if width != 1:raise ValueError('Technical resource origin is limited to single-condition campaigns')
         from research import resource_origin
@@ -78,7 +85,7 @@ def validate(plan, repo):
         raise ValueError('Existing resource safety thresholds required')
     if len(plan['assignments']) != n:
         raise ValueError('Explicit assignment count mismatch')
-    if width == 1 and len({c['condition'] for p in plan['assignments'] for c in p['cases']}) != 1:
+    if plan['kind'] == SINGLE_KIND and len({c['condition'] for p in plan['assignments'] for c in p['cases']}) != 1:
         raise ValueError('Single-condition campaign requires one condition across all assignments')
     tasks = set()
     for index, pair in enumerate(plan['assignments'], 1):
@@ -98,12 +105,14 @@ def validate(plan, repo):
             condition = profiles.resolve(repo, case['task'], case['condition'], plan['runtime_by_task'][case['task']],
                                          task_revision=plan['task_revision'], approved_model_id=settings['model_id'])
             runtime = condition['runtime']
-            if (condition['intervention']['method'] == 'staged-explore') != bool(extra):
+            if (condition['intervention']['method'] in ('staged-explore','explore-observed')) != bool(extra):
                 raise ValueError('Staged condition requires explicit request partitions and retry policy')
             if extra:
                 from outer.harness import staged_input
-                staged_input.request_partition(condition['migration_request'],
-                    util.read_json(live_pilot.checked(plan['staged_inputs'][case['task']])))
+                partition=util.read_json(live_pilot.checked(plan['staged_inputs'][case['task']]))
+                staged_input.request_partition(condition['migration_request'],partition)
+                if (mixed or condition['intervention']['method']=='explore-observed') and not staged_input.observed(partition['boundary_contract']):
+                    raise ValueError('Explicit shared resumption observation policy required')
             if (runtime['model_id'] != plan['settings']['model_id']
                     or runtime['timeout_seconds'] != bounds['run_seconds']
                     or runtime['provider_timeout_seconds'] != bounds['provider_seconds']):
@@ -129,6 +138,9 @@ def validate(plan, repo):
     monitor = live_pilot.checked(plan['resource_monitor'])
     if live_pilot.checked(plan['resource_probe']) != monitor.with_name('wave_resource_probe.py'):
         raise ValueError('Foreign resource probe')
+    from research.resource_supervisor import load_monitor
+    load_monitor(dict(resource_monitor=plan['resource_monitor'], resource_probe=plan['resource_probe'],
+                      cases_per_assignment=width))
     live_pilot.checked(plan['browser_pin'])
     return root
 
@@ -140,8 +152,9 @@ def template(plan):
         'runtime_locks', 'thresholds', 'pair_concurrency')} | dict(
         kind=live_pilot.MAIN_KIND, schema_version=1, require_fixed_instances=True)
     # Preserve historical templates byte-for-byte; single-case mode is explicit.
-    if plan['kind'] == SINGLE_KIND:
+    if plan['kind'] != KIND:
         result['cases_per_assignment'] = 1
+    if plan['kind']==MIXED_KIND:result['presentation_allocation']=copy.deepcopy(plan['presentation_allocation'])
     for name in STAGED_FIELDS & set(plan): result[name] = copy.deepcopy(plan[name])
     return result
 
@@ -167,7 +180,7 @@ def initialize(repo, plan_path, approval_path):
         usage=dict(requests=0, observed_tokens=0, accumulated_run_seconds=0., dispatched_runs=0,
                    unknown_usage_requests=[]), bounds=copy.deepcopy(plan['bounds']), started_at=run.now(),
         policy=dict(active_model_pairs=plan['pair_concurrency'],
-                    active_model_runs=(1 if plan['kind'] == SINGLE_KIND else 2)*plan['pair_concurrency'],
+                    active_model_runs=(2 if plan['kind'] == KIND else 1)*plan['pair_concurrency'],
                     evaluation_workers=1, quality_selection=False, intermediate_publication=False), at=run.now())
     if 'resource_origin' in plan:
         from research import resource_origin
@@ -196,7 +209,7 @@ def verify_config(config, repo):
             or config['pair_count'] != plan['pair_count'] or config['template'] != template(plan)
             or config['bounds'] != plan['bounds']
             or config['policy']['active_model_pairs'] != plan['pair_concurrency']
-            or config['policy']['active_model_runs'] != (1 if plan['kind'] == SINGLE_KIND else 2)*plan['pair_concurrency']
+            or config['policy']['active_model_runs'] != (2 if plan['kind'] == KIND else 1)*plan['pair_concurrency']
             or config['policy'].get('evaluation_workers') != 1
             or config['policy'].get('quality_selection') is not False
             or config['accepted_slots'] or config['attempted_slots'] or config['reserved_pair_attempts']

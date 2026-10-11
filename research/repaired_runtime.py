@@ -35,6 +35,16 @@ FIXED_RUNTIME = {'model_id': 'deepseek-v4.1-flash', 'provider': 'opencode-go',
                  'compaction': {'auto': True, 'prune': False}}
 
 
+def _runtime_family(repo, runtime_id, observation_revision=None):
+    if observation_revision is None:
+        return next((value for value in FAMILIES.values() if value['runtime_id'] == runtime_id), None)
+    from research import observation_revision as revision
+    names = [name for name in ('music', 'education') if runtime_id == 'deepseek-'+name+'-observation-v1']
+    if len(names) != 1:
+        raise ValueError('Observation revision requires its fresh runtime namespace')
+    return revision.family_binding(repo, observation_revision, names[0])[0]
+
+
 def _relative(value):
     path = PurePosixPath(value)
     if (not isinstance(value, str) or not value or '\\' in value or ':' in value
@@ -170,8 +180,7 @@ def validate_repaired_runtime_binding(repo, lock):
             or not re.fullmatch(r'[0-9a-f]{40}', current.get('source_commit', ''))
             or _git(repo, 'status', '--porcelain')):
         raise ValueError('Repaired runtime requires a clean current applicability binding')
-    family = next((value for value in FAMILIES.values()
-                   if value['runtime_id'] == lock.get('runtime_profile_id')), None)
+    family = _runtime_family(repo, lock.get('runtime_profile_id'), binding.get('observation_revision'))
     if (family is None or lock.get('task_profile_revision') != 'evaluators-20261006'
             or lock.get('evaluator_version') != family['version']
             or lock.get('evaluator_project') != family['project'] + '/' + family['project'] + '.csproj'
@@ -218,6 +227,14 @@ def validate_repaired_runtime_binding(repo, lock):
         raise ValueError('Prepared accepted receipt hash differs')
     receipt = util.read_json(receipt_path)
     inventory, accepted_sources = _receipt_binding(repo, bundle, receipt, family)
+    if 'observation_revision' in binding:
+        from research import observation_revision as revision
+        _, entry, _, _ = revision.family_binding(repo, binding['observation_revision'],
+                                                  revision.family_for_task(family['tasks'][0]))
+        if (entry['images'] != images or entry['build_receipt']['sha256'] != receipt_sha
+                or lock.get('evaluator_build', {}).get('observation_revision') != binding['observation_revision']
+                or source_files.get('research/observation_revision.py') != util.sha256_file(repo/'research/observation_revision.py')):
+            raise ValueError('Observation revision runtime/build binding differs')
     if (util.tree_hashes(bundle) != lock.get('evaluator_files')
             or lock.get('evaluator_sha256') != family['assembly_sha256']
             or any(source_files.get(name) != digest for name, digest in accepted_sources.items())
@@ -241,7 +258,8 @@ def validate_repaired_runtime_binding(repo, lock):
 
 def prepare_repaired_runtime(repo, *, task_id, task_revision, runtime_id, prior_lock,
                              prior_lock_sha256, accepted_bundle, accepted_receipt,
-                             accepted_receipt_sha256, controller_source_commit):
+                             accepted_receipt_sha256, controller_source_commit,
+                             observation_revision=None):
     """Validate all bindings first, then exclusively create a new runtime root.
 
     The only containers run are network-none version probes. Old image-embedded
@@ -249,8 +267,11 @@ def prepare_repaired_runtime(repo, *, task_id, task_revision, runtime_id, prior_
     Repeated preparation fails instead of overwriting an existing namespace.
     """
     repo = Path(repo).resolve()
-    family = next((value for value in FAMILIES.values() if task_id in value['tasks']), None)
-    if family is None or task_revision != 'evaluators-20261006' or runtime_id != family['runtime_id']:
+    if observation_revision is not None and not isinstance(observation_revision, dict):
+        from research.live_pilot import reference
+        observation_revision = reference(Path(observation_revision).resolve())
+    family = _runtime_family(repo, runtime_id, observation_revision)
+    if family is None or task_id not in family['tasks'] or task_revision != 'evaluators-20261006':
         raise ValueError('Unsupported repaired family/revision/runtime identity')
     if not re.fullmatch(r'[0-9a-f]{40}', controller_source_commit):
         raise ValueError('Full committed controller identity required')
@@ -280,6 +301,14 @@ def prepare_repaired_runtime(repo, *, task_id, task_revision, runtime_id, prior_
             or util.sha256_file(accepted_receipt) != accepted_receipt_sha256):
         raise ValueError('Prior lock/accepted receipt pin mismatch')
     old, receipt = util.read_json(prior_lock), util.read_json(accepted_receipt)
+    if observation_revision is not None:
+        from research import observation_revision as revision
+        _, entry, _, _ = revision.family_binding(repo, observation_revision, revision.family_for_task(task_id))
+        if (Path(entry['bundle']).resolve() != accepted_bundle
+                or Path(entry['build_receipt']['path']).resolve() != accepted_receipt
+                or entry['build_receipt']['sha256'] != accepted_receipt_sha256
+                or entry['images'] != old.get('images')):
+            raise ValueError('Observation preparation differs from the explicit revision pins')
     if old.get('versions') != {'dotnet': '8.0.425', 'opencode': '1.17.11'}:
         raise ValueError('Prior runtime version receipt mismatch')
     if old.get('controller_files', {}).get('gateway.py') != util.sha256_file(repo / 'outer/harness/gateway.py'):
@@ -292,6 +321,8 @@ def prepare_repaired_runtime(repo, *, task_id, task_revision, runtime_id, prior_
     controller = runtime.controller_files(repo)
     committed_names = [*source_hashes, *['outer/harness/' + name for name in controller],
                        'research/repaired_runtime.py', 'outer/profiles/runtimes/' + runtime_id + '.json']
+    if observation_revision is not None:
+        committed_names.append('research/observation_revision.py')
     for name, value in tasks.items():
         committed_names.extend(['outer/profiles/task-revisions/' + task_revision + '/' + name + '.json',
                                 value['evaluation']['spec_path']])
@@ -326,6 +357,8 @@ def prepare_repaired_runtime(repo, *, task_id, task_revision, runtime_id, prior_
              'source_identity': receipt.get('source_identity', 'accepted_receipt_commit_and_exact_inventory'),
              'accepted_receipt_sha256': accepted_receipt_sha256, 'source_files': source_hashes,
              'current_source_matches_accepted': True}
+    if observation_revision is not None:
+        build['observation_revision'] = copy.deepcopy(observation_revision)
     lock = {'schema_version': 1, 'build_id': build_id, 'images': images,
             'controller_files': controller, 'controller_source_commit': controller_source_commit,
             'controller_clean_worktree': True, 'runtime_profile_id': runtime_id,
@@ -343,6 +376,8 @@ def prepare_repaired_runtime(repo, *, task_id, task_revision, runtime_id, prior_
                             'reused_images': copy.deepcopy(images), 'worker_sdk_version': worker_sdk,
                             'image_embedded_evaluator_used_for_scoring': False},
             'created_at': run.now()}
+    if observation_revision is not None:
+        lock['repaired_runtime_binding']['observation_revision'] = copy.deepcopy(observation_revision)
     root.mkdir(parents=True, exist_ok=False)
     # Copy receipt as immutable evidence, never alter the accepted source bundle.
     shutil.copytree(accepted_bundle, root / 'evaluator')
@@ -367,6 +402,7 @@ def main():
     for name in ('repo', 'task_id', 'task_revision', 'runtime_id', 'prior_lock', 'prior_lock_sha256',
                  'accepted_bundle', 'accepted_receipt', 'accepted_receipt_sha256', 'controller_source_commit'):
         parser.add_argument('--' + name.replace('_', '-'), required=True)
+    parser.add_argument('--observation-revision', help='Explicit same-spec revision/build pin file for a fresh observation runtime')
     options = vars(parser.parse_args())
     repo = options.pop('repo')
     lock = prepare_repaired_runtime(repo, **options)

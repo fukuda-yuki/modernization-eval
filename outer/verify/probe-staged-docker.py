@@ -28,7 +28,7 @@ CHECKPOINT=staged_input.Controller.checkpoint
 
 def checkpoint_with_stop(controller,label,binding):
     receipt=CHECKPOINT(controller,label,binding)
-    if label=='before-additional' and 'stop-before' in controller.contract['run_id']:
+    if label in ('before-additional','before-resume') and 'stop-before' in controller.contract['run_id']:
         # Fault injection inside the real owned pause; no message is submitted.
         util.write_new_json(Path(controller.contract['workspace']).parent/'stop-request.json',{'reason':'synthetic_operator_stop'})
         controller.stop('synthetic_operator_stop')
@@ -63,37 +63,51 @@ ENTRYPOINT ["python3","/app/provider.py"]
     return images
 
 
-def case(directory,images,scenario,grouped=False):
-    root=directory/('STAGED-'+scenario+'-staged-explore-001');root.mkdir()
+def case(directory,images,scenario,grouped=False,mode=None,task=None):
+    condition_id=mode or 'staged-explore'
+    root=directory/((task or 'STAGED')+'-'+scenario+'-'+condition_id+'-001');root.mkdir()
     for name in ('inputs/legacy-source','workspace','state','usage/raw','evidence','profiles','evaluation-assets'):
         (root/name).mkdir(parents=True)
     initial='Synthetic initial requirement: implement stage one.\n'
     additional='Synthetic later requirement: implement stage two in the same file.\n'
-    (root/'inputs/prompt.txt').write_text(initial)
+    partial=initial
+    if mode=='explore-observed':initial+=additional
     (root/'inputs/legacy-source/Original.cs').write_text('// synthetic original source')
     (root/'inputs/original.sqlite').write_bytes(b'synthetic original DB; never hidden')
-    condition=profiles.resolve(REPO,'MS1-001','explore')
+    real_task=task in ('MS1-CONT-A','MS1-CONT-B','CU1-ENR-C','CU1-ENR-D')
+    condition=(profiles.resolve(REPO,task,condition_id,
+        'deepseek-music-observation-v1' if task.startswith('MS1') else 'deepseek-education-observation-v1',
+        task_revision='evaluators-20261006') if real_task else profiles.resolve(REPO,'MS1-001','explore'))
     condition['runtime']['prompt_transport']='stdin';condition['runtime']['timeout_seconds']=50
     condition['runtime']['provider_timeout_seconds']=40
-    condition['budget']['value']=50;condition['intervention']['method']='staged-explore'
+    condition['budget']['value']=50;condition['intervention']['method']=condition_id
+    # Exercise each real profile's common wrapper/collection settings with toy
+    # request text and toy source/DB. Never copy a research request into a fixture.
+    condition['migration_request']=partial+additional
+    context={'method':condition_id,'blocks':[]}
+    if mode:initial,context=profiles.prepare_prompt({**condition,'migration_request':initial},root/'inputs/legacy-source')
+    (root/'inputs/prompt.txt').write_text(initial)
     if scenario=='archive-failure':condition['collection_policy']=util.STATIC_DB_COLLECTION_POLICY
     condition['runtime_lock']={'controller_files':runtime.controller_files(REPO),'images':images,'opencode_version':'1.17.11'}
     util.write_new_json(root/'condition.json',condition)
-    util.write_new_json(root/'context.json',{'method':'staged-explore','blocks':[]})
-    manifest={'schema_version':2,'run_id':root.name,'run_instance_id':uuid.uuid4().hex,'task_id':'STAGED-'+scenario,
-        'condition_id':'staged-explore','started_at':None,'stop_confirmed':False,
+    util.write_new_json(root/'context.json',context)
+    manifest={'schema_version':2,'run_id':root.name,'run_instance_id':uuid.uuid4().hex,'task_id':task or 'STAGED-'+scenario,
+        'condition_id':condition_id,'started_at':None,'stop_confirmed':False,
         'condition_sha256':util.sha256_file(root/'condition.json'),'context_sha256':util.sha256_file(root/'context.json'),
         'input_files':util.tree_hashes(root/'inputs'),'assets_sha256':{},'profile_files':{},
         'prompt_sha256':util.sha256_file(root/'inputs/prompt.txt')}
     util.write_new_json(root/'manifest.json',manifest)
     policy={'suffixes':['.cs'],'excluded_directories':['obj','bin']}
-    _,_,partition=staged_input.split_sections([{'id':'a','text':initial},{'id':'b','text':additional}],['a'],['b'])
+    _,_,partition=staged_input.split_sections([{'id':'a','text':partial},{'id':'b','text':additional}],['a'],['b'])
+    partition['initial_sha256']=util.sha256_bytes(initial.encode())
     boundary={'transport':'opencode-server-response-barrier-v1',
         'snapshot_policy':policy,'snapshot_policy_sha256':staged_input.digest(policy)}
     if grouped:boundary['boundary_policy']=staged_input.GROUP_BOUNDARY
+    if mode:boundary.update(boundary_policy=staged_input.GROUP_BOUNDARY,observation_policy=staged_input.OBSERVATION_POLICY)
     controller=staged_input.create(root/'_controller/staged-input',run_id=root.name,
-        run_instance_id=manifest['run_instance_id'],task=manifest['task_id'],condition='staged-explore',
-        workspace=root/'workspace',worker_roots=[root/'inputs',root/'state'],initial_prompt=initial,additional_prompt=additional,
+        run_instance_id=manifest['run_instance_id'],task=manifest['task_id'],condition=condition_id,
+        workspace=root/'workspace',worker_roots=[root/'inputs',root/'state'],initial_prompt=initial,
+        additional_prompt=None if mode=='explore-observed' else additional,
         budget_seconds=50,boundary_contract=boundary,partition=partition,
         artifact_collection_policy=util.resolve_collection_policy(condition.get('collection_policy')))
     controller.bind_run(root)
@@ -109,9 +123,38 @@ def case(directory,images,scenario,grouped=False):
     checks={'stop_confirmed':result['stop_confirmed'],'network_cleaned':result['network_cleanup']['confirmed'],
         'real_isolation_probe':util.read_json(root/'evidence/isolation.json')['verified'],
         'one_native_session':len(usage.get('staged_input',{}).get('native_session_ids',[]))==1,
-        'later_absent_first':bool(requests) and not gateway.check_additional_input(requests[0],additional)['locations'],
+        'correct_initial':bool(requests) and (gateway.check_additional_input(requests[0],additional)['verified']
+            if mode=='explore-observed' else not gateway.check_additional_input(requests[0],additional)['locations']),
         'unauthorized_binding_refused':True}
-    if scenario=='stop-before':
+    if mode and scenario!='stop-before':
+        stage=usage['staged_input'];checkpoints=stage['checkpoints'];control=mode=='explore-observed'
+        expected_calls=1 if scenario=='early' else 2 if scenario=='no-post-change' else 4 if scenario=='continue' else 3
+        reached=scenario!='early';post=scenario not in ('early','no-post-change')
+        actions=[e for e in events if e['kind']=='resumption_action']
+        checks.update(no_extra_file=not (controller.root/'additional.txt').exists() if control else True,
+            exact_sends=sum(e['kind']=='send_intent' for e in events)==(0 if control or not reached else 1),
+            explicit_action=(len(actions)==1 and actions[0]['action']['action']==('no_input_by_design' if control else 'additional_input_acknowledged')) if reached else not actions,
+            complete_stage_evidence=usage['input_reached'] and not usage['inventory_issues'],
+            all_usage=usage['observed_tokens']==12*expected_calls,
+            request_count=len(requests)==expected_calls,
+            first_post_resume=bool(stage['first_post_resume_request'])==reached,
+            first_additional_absent=stage['first_observed_request'] is None if control else bool(stage['first_observed_request'])==reached,
+            exact_native_user_count=bool(stage.get('native_input_inventory')) and len(stage['native_input_inventory']['external_user_messages'])==(1 if control or not reached else 2),
+            before_checkpoint=(checkpoints['before-resume']['archive'] is None
+                and bool(checkpoints['before-resume']['reason'])) if scenario=='archive-failure'
+                else bool(checkpoints['before-resume']['archive'])==reached,
+            after_checkpoint=bool(checkpoints['after-resume-first-change']['archive'])==post,
+            final_checkpoint=bool(checkpoints['final']['archive']),
+            neutral_labels=set(checkpoints)=={'initial','before-resume','after-resume-first-change','final'},
+            pause_resume_pairs=sum(e['kind']=='worker_paused' for e in events)==sum(e['kind']=='worker_resumed' for e in events)==(2 if post else 1 if reached else 0))
+        if post:
+            receipt=checkpoints['after-resume-first-change']['archive']
+            preserve.restore(controller.root/'checkpoint-archive',receipt,root/'restore-post')
+            checks['first_post_change_restored']=(root/'restore-post/workspace/Program.cs').read_text()=='// synthetic stage 2\n'
+        if scenario=='continue':
+            checks['model_continued_after_observation']=(root/'workspace/Program.cs').read_text()=='// synthetic stage 3\n'
+        checks['not_applicable_delivery']=stage['additional_input_reached'] is None if control else True
+    elif scenario=='stop-before':
         checks.update(no_additional_send=not any(e['kind']=='send_intent' for e in events),
             initial_request_only=len(requests)==1,stopped_reason=result['end_reason']=='operator_stop',
             no_false_delivery=not usage['staged_input']['additional_input_reached'],
@@ -148,7 +191,7 @@ def case(directory,images,scenario,grouped=False):
     for role in ('worker','gateway'):
         item=runtime._owned_container(state,role)
         if item: runtime.docker('rm',state[role])
-    return {'scenario':scenario,'checks':checks,'passed':all(checks.values()),'end_reason':result['end_reason'],
+    return {'scenario':scenario,'condition':condition_id,'task':manifest['task_id'],'checks':checks,'passed':all(checks.values()),'end_reason':result['end_reason'],
         'started_at':result['started_at'],'ended_at':result['ended_at'],
         'request_count':len(requests),'observed_tokens':usage['observed_tokens'],'inventory_issues':usage['inventory_issues']}
 
@@ -158,6 +201,7 @@ def main():
     p.add_argument('--base-image',default=BASE);p.add_argument('--output',required=True,type=Path)
     p.add_argument('--scenario',choices=['write','parallel','child','post-parallel','post-child','archive-failure','stop-before','all'],default='all')
     p.add_argument('--group-boundary',action='store_true')
+    p.add_argument('--presentation-matrix',action='store_true',help='All four synthetic task bindings in both observed presentation modes, plus early/no-change/STOP cases')
     p.add_argument('--concurrency',type=int,choices=[1,4],default=1)
     a=p.parse_args();binary=a.opencode.resolve(strict=True)
     if util.sha256_file(binary)!=BINARY_SHA:raise ValueError('Exact already-acquired binary required')
@@ -175,7 +219,14 @@ def main():
             # Each case separately checks the real authorization validator.
             scenarios=('write','parallel','child','post-parallel','post-child') if a.scenario=='all' else (a.scenario,)
             if a.scenario=='all' and a.group_boundary:scenarios+=('archive-failure','stop-before')
-            if a.concurrency == 1:
+            if a.presentation_matrix:
+                jobs=[('continue',mode,task) for task in ('MS1-CONT-A','MS1-CONT-B','CU1-ENR-C','CU1-ENR-D')
+                      for mode in ('staged-explore','explore-observed')]
+                jobs += [(scenario,mode,'TOY') for scenario in ('early','no-post-change','stop-before','archive-failure')
+                         for mode in ('staged-explore','explore-observed')]
+                with ThreadPoolExecutor(a.concurrency) as pool:
+                    rows=list(pool.map(lambda job:case(a.output,images,job[0],True,job[1],job[2]),jobs))
+            elif a.concurrency == 1:
                 for scenario in scenarios: rows.append(case(a.output,images,scenario,a.group_boundary))
             else:
                 with ThreadPoolExecutor(a.concurrency) as pool:
@@ -186,7 +237,8 @@ def main():
         result={'synthetic':True,'external_model_called':False,'images':images,'base_image':a.base_image,
             'binary_sha256':BINARY_SHA,'cases':rows,'passed':all(row['passed'] for row in rows),
             'production_dotnet_worker_tested':False,'live_acceptance':False,
-            'concurrency':a.concurrency,'peak_overlapping_runs':peak,'group_boundary':a.group_boundary}
+            'concurrency':a.concurrency,'peak_overlapping_runs':peak,'group_boundary':a.group_boundary or a.presentation_matrix,
+            'presentation_matrix':a.presentation_matrix}
         if a.concurrency==4 and len(rows)>=4:result['passed'] &= peak==4
         util.write_new_json(a.output/'result.json',result);print(json.dumps(result,indent=2))
         return 0 if result['passed'] else 1

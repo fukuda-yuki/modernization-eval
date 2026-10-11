@@ -20,6 +20,9 @@ class CampaignTests(unittest.TestCase):
         for name in ('monitor.py', 'wave_resource_probe.py', 'browser.json', 'lock.json'):
             util.write_new_json(self.root/name, {})
             refs[name] = live_pilot.reference(self.root/name)
+        (self.root/'monitor.py').write_text('CADENCE_SECONDS=10\nSTALE_SECONDS=30\n'
+            'class ResourceMonitor:\n    SUPPORTED_RUN_COUNTS=(0,1,2,4,8)\n', encoding='utf-8')
+        refs['monitor.py'] = live_pilot.reference(self.root/'monitor.py')
         self.plan = dict(kind=fresh.KIND, campaign_id='synthetic-a', output_root=str(self.root/'a'),
             pair_count=1, pair_concurrency=1, task_revision='evaluators-20261006',
             assignments=[dict(pair=1, cases=[dict(task='MS1-CONT-A', condition=arm, pair=1, slot=i,
@@ -92,6 +95,69 @@ class CampaignTests(unittest.TestCase):
             with self.subTest(key=key), self.assertRaises(ValueError):
                 fresh.verify_config(dict(config, **{key:value}), REPO)
 
+    def test_mixed_observed_campaign_freezes_allocation_and_shares_existing_engine_limits(self):
+        from outer.harness import staged_input
+        from research import presentation_allocation
+        tasks=['Toy-Music-A','Toy-Music-B','Toy-Education-C','Toy-Education-D']
+        allocation,assignments=presentation_allocation.generate('synthetic-fixed-seed',tasks)
+        runtime=profiles.read(REPO,'runtimes','deepseek-music-repaired-v1')
+        task=profiles.task_profile(REPO,'MS1-CONT-A','evaluators-20261006')
+        self.patch(profiles,'task_profile',return_value=task)
+        self.patch(profiles,'resolve',side_effect=lambda repo,t,c,r,**kw:dict(intervention={'method':c},
+            runtime=runtime,migration_request='first\nlater\n'))
+        policy=dict(suffixes=['.cs'],excluded_directories=[])
+        partition=dict(kind='staged_request_partition_v1',request_sha256=util.sha256_bytes(b'first\nlater\n'),
+            sections=[dict(id='a',text='first\n'),dict(id='b',text='later\n')],initial_ids=['a'],additional_ids=['b'],
+            boundary_contract=dict(transport='opencode-server-response-barrier-v1',boundary_policy=staged_input.GROUP_BOUNDARY,
+                observation_policy=staged_input.OBSERVATION_POLICY,snapshot_policy=policy,snapshot_policy_sha256=staged_input.digest(policy)))
+        path=self.root/'toy-partition.json';util.write_new_json(path,partition)
+        self.plan.update(kind=fresh.MIXED_KIND,pair_count=100,pair_concurrency=4,assignments=assignments,
+            presentation_allocation=allocation,runtime_by_task={t:runtime['id'] for t in tasks},
+            staged_inputs={t:live_pilot.reference(path) for t in tasks},
+            staged_retry=dict(technical_failure_policy='sealed_infrastructure_failure_v1',retry_budget='shared_reserved_attempts'))
+        self.plan['bounds'].update(max_pairs=100,max_runs=100,max_pair_attempts=150,request_count=500)
+        config=self.initialize('mixed');fresh.verify_config(config,REPO)
+        self.assertEqual(config['policy']['active_model_runs'],4)
+        self.assertEqual(config['policy']['evaluation_workers'],1)
+        self.assertEqual(config['template']['cases_per_assignment'],1)
+        self.assertEqual(config['template']['presentation_allocation'],allocation)
+        self.assertNotIn('authorization',config)
+        self.setup_engine();self.calls=1  # All synthetic acquisitions technically complete; quality is zero.
+        pipeline.run_pipeline(REPO,Path(config['root'])/'config.json')
+        self.assertEqual(self.calls,101);self.assertEqual(len(set(self.uuids)),100)
+        events=pipeline.pair_execution.events(Path(config['root'])/'events.jsonl')
+        # Thread execution/record order can differ inside each admitted group;
+        # retain the actual order instead of equating it with planned position.
+        self.assertEqual(sorted(e['slot'] for e in events if e['kind']=='reserved'),list(range(1,101)))
+        adopted=[e for e in events if e['kind']=='accepted']
+        self.assertEqual(len(adopted),100)
+        self.assertEqual(sum('explore-observed' in e['quality'] for e in adopted),20)
+        self.assertEqual(sum('staged-explore' in e['quality'] for e in adopted),80)
+        self.assertTrue(all(next(iter(e['quality'].values()))==0 for e in adopted))
+        self.assertEqual(events[-1]['usage']['requests'],100)
+        self.assertEqual(events[-1]['usage']['observed_tokens'],500)
+        pipeline.run_pipeline(REPO,Path(config['root'])/'config.json');self.assertEqual(self.calls,101)
+        for key,value in [('kind',fresh.SINGLE_KIND),('pair_concurrency',5),('pair_count',101)]:
+            with self.assertRaises(ValueError):fresh.validate(dict(self.plan,**{key:value}),REPO)
+        changed=copy.deepcopy(self.plan);changed['assignments'][0]['cases'][0]['condition']='explore'
+        with self.assertRaises(ValueError):fresh.validate(changed,REPO)
+        changed=copy.deepcopy(partition);del changed['boundary_contract']['observation_policy']
+        util.write_json_atomic(path,changed)
+        changed=copy.deepcopy(self.plan);changed['staged_inputs']={t:live_pilot.reference(path) for t in tasks}
+        with self.assertRaisesRegex(ValueError,'resumption observation'):fresh.validate(changed,REPO)
+
+    def test_observation_runtime_uses_the_existing_campaign_and_epoch_path(self):
+        runtime_id='deepseek-music-observation-v1'
+        old=self.plan['runtime_by_task']['MS1-CONT-A']
+        lock=util.read_json(self.root/'lock.json');lock['runtime_profile_id']=runtime_id
+        util.write_json_atomic(self.root/'lock.json',lock)
+        self.plan['runtime_by_task']['MS1-CONT-A']=runtime_id
+        self.plan['runtime_locks']={runtime_id:live_pilot.reference(self.root/'lock.json')}
+        config=self.initialize('observation')
+        fresh.verify_config(config,REPO)
+        self.assertEqual(config['template']['runtime_by_task'],{'MS1-CONT-A':runtime_id})
+        self.assertNotIn(old,config['template']['runtime_locks'])
+
     def setup_engine(self):
         # The production epoch relocation uses the real prepared runtime path.
         self.patch(pipeline, 'PairWatch', side_effect=lambda *a: Mock(fault=None, finish=Mock(return_value=True)))
@@ -123,7 +189,7 @@ class CampaignTests(unittest.TestCase):
         def epoch(repo, config, number):
             with patch.object(live_pilot, 'reference', wraps=live_pilot.reference) as ref:
                 actual = ref._mock_wraps
-                ref.side_effect = lambda p: actual(self.root/'lock.json' if str(p).endswith('/runtime/'+self.root.name+'/lock.json') else p)
+                ref.side_effect = lambda p: actual(self.root/'lock.json' if Path(p).as_posix().endswith('/runtime/'+self.root.name+'/lock.json') else p)
                 return original(repo, config, number)
         self.patch(pipeline, 'create_epoch', side_effect=epoch)
 

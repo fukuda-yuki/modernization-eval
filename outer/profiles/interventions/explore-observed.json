@@ -1,0 +1,7 @@
+{
+  "schema_version": 1,
+  "title": "Full initial exploration with resumption observation",
+  "id": "explore-observed",
+  "method": "explore-observed",
+  "description": "Full original explore request once, no additional message, same native serve/attach runner and explicit resumption observation policy as staged exploration. Original source and database remain available without source preload."
+}

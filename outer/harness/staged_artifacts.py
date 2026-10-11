@@ -1,13 +1,14 @@
 """Private, reversible Run checkpoints; never final collection or evaluation."""
 from pathlib import Path
 import time
-from . import preserve, util
+from . import preserve, staged_input, util
 
 LABELS=('initial','before-additional','after-additional','final')
 
 
 def capture(controller,label,binding):
-    if label not in LABELS:raise ValueError('Unknown staged checkpoint')
+    labels=staged_input.checkpoint_labels(controller.contract)
+    if label not in labels:raise ValueError('Unknown staged checkpoint')
     directory=controller.root/'checkpoints'/label
     directory.mkdir(parents=True,exist_ok=False)
     started=time.monotonic();at=controller.clock()
@@ -25,7 +26,7 @@ def capture(controller,label,binding):
                 or util.collection_hash(directory/'workspace',policy=policy)!=before):
             raise ValueError('Workspace changed during private checkpoint')
         previous=None
-        for name in reversed(LABELS[:LABELS.index(label)]):
+        for name in reversed(labels[:labels.index(label)]):
             candidate=controller.root/'checkpoints'/name/'tree.json'
             if candidate.exists():previous=(name,util.read_json(candidate));break
         files=copied['frozen'];old=previous[1]['files'] if previous else {}
@@ -55,7 +56,8 @@ def capture(controller,label,binding):
 
 def summary(controller,terminal_reason):
     result={};ledger=controller.events()
-    for label in LABELS:
+    labels=staged_input.checkpoint_labels(controller.contract)
+    for label in labels:
         path=controller.root/'checkpoints'/label/'receipt.json'
         if path.exists():
             receipt=util.read_json(path)
@@ -70,12 +72,14 @@ def summary(controller,terminal_reason):
                     raise ValueError('Staged checkpoint identity changed')
             result[label]=receipt
         else:
-            reason=('no_post_input_implementation_change_observed' if label=='after-additional'
-                    else 'boundary_never_reached' if label=='before-additional' else 'checkpoint_not_taken')
-            phase={'before-additional':'before_additional','after-additional':'after_additional'}.get(label)
+            reason=(('no_post_resume_implementation_change_observed' if staged_input.observed(controller.contract['boundary_contract'])
+                     else 'no_post_input_implementation_change_observed') if label==labels[2]
+                    else 'boundary_never_reached' if label==labels[1] else 'checkpoint_not_taken')
+            phase={labels[1]:'before_resume' if staged_input.observed(controller.contract['boundary_contract']) else 'before_additional',
+                   labels[2]:'after_resume' if staged_input.observed(controller.contract['boundary_contract']) else 'after_additional'}.get(label)
             unknown=[e for e in ledger if e['kind']=='boundary_unknown' and phase and e.get('phase')==phase]
             if unknown:reason='boundary_unknown:'+unknown[-1]['reason']
-            elif label=='after-additional' and not any(e['kind']=='acknowledged' for e in ledger):
-                reason='additional_input_not_acknowledged'
+            elif label==labels[2] and not any(e['kind'] in ('acknowledged','resumption_action') for e in ledger):
+                reason='resume_not_reached' if staged_input.observed(controller.contract['boundary_contract']) else 'additional_input_not_acknowledged'
             result[label]={'archive':None,'reason':reason,'terminal_reason':terminal_reason}
     return result
