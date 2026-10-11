@@ -13,6 +13,35 @@ import uuid
 from . import ownership, util
 
 GROUP_BOUNDARY = 'response_tool_group_pause_v1'
+OBSERVATION_POLICY = 'resumption_first_change_v1'
+OBSERVED_KIND = 'observed_presentation_v1'
+
+
+def observed(contract):
+    return contract.get('observation_policy') == OBSERVATION_POLICY
+
+
+def no_additional(contract):
+    return contract.get('presentation_mode') == 'full_initial_no_additional'
+
+
+def checkpoint_labels(contract):
+    return (('initial','before-resume','after-resume-first-change','final') if observed(contract['boundary_contract'])
+            else ('initial','before-additional','after-additional','final'))
+
+
+def prepare_presentation(condition, plan, source):
+    """The observed control uses the exact existing full explore prompt bytes."""
+    from . import profiles
+    initial, additional, partition = request_partition(condition['migration_request'], plan)
+    control = condition['intervention']['method'] == 'explore-observed'
+    if control and not observed(plan['boundary_contract']):
+        raise ValueError('Observed control requires the explicit resumption observation policy')
+    prompt, context = profiles.prepare_prompt({**condition, 'migration_request':
+        condition['migration_request'] if control else initial}, source)
+    partition = {**partition, 'request_initial_sha256':partition['initial_sha256'],
+                 'initial_sha256':util.sha256_bytes(prompt.encode())}
+    return prompt, context, None if control else additional, partition
 
 
 def group_boundary(contract):
@@ -47,8 +76,11 @@ def request_partition(request, plan):
             or ''.join(section['text'] for section in plan['sections']) != request
             or plan['boundary_contract'].get('transport') != 'opencode-server-response-barrier-v1'
             or (set(plan['boundary_contract']) != {'transport','snapshot_policy','snapshot_policy_sha256'}
-                and (set(plan['boundary_contract']) != {'transport','snapshot_policy','snapshot_policy_sha256','boundary_policy'}
+                and (set(plan['boundary_contract']) not in (
+                        {'transport','snapshot_policy','snapshot_policy_sha256','boundary_policy'},
+                        {'transport','snapshot_policy','snapshot_policy_sha256','boundary_policy','observation_policy'})
                      or not group_boundary(plan['boundary_contract'])))
+            or ('observation_policy' in plan['boundary_contract'] and not observed(plan['boundary_contract']))
             or digest(plan['boundary_contract']['snapshot_policy']) != plan['boundary_contract']['snapshot_policy_sha256']):
         raise ValueError('Frozen original request, exhaustive sections and explicit transport/snapshot policy required')
     validate_snapshot_policy(plan['boundary_contract']['snapshot_policy'])
@@ -83,16 +115,21 @@ def create(directory, *, run_id, run_instance_id, task, condition, workspace, wo
            initial_prompt, additional_prompt, budget_seconds, boundary_contract, partition, artifact_collection_policy=None):
     directory, workspace = Path(directory).resolve(), Path(workspace).resolve(strict=True)
     roots = [workspace, *(Path(p).resolve(strict=True) for p in worker_roots)]
+    control = condition == 'explore-observed'
+    if control and (not observed(boundary_contract) or additional_prompt is not None):
+        raise ValueError('Control requires explicit observation policy and zero additional input')
     if any(directory.is_relative_to(p) or p.is_relative_to(directory) for p in roots):
         raise ValueError('Additional input must be outside every worker-readable mount')
     if (type(budget_seconds) is not int or budget_seconds <= 0 or not boundary_contract.get('snapshot_policy_sha256')
             or partition.get('initial_sha256') != util.sha256_bytes(initial_prompt.encode())
-            or partition.get('additional_sha256') != util.sha256_bytes(additional_prompt.encode())
-            or not initial_prompt or not additional_prompt or additional_prompt in initial_prompt
+            or (not control and (not additional_prompt
+                or partition.get('additional_sha256') != util.sha256_bytes(additional_prompt.encode())
+                or additional_prompt in initial_prompt))
+            or not initial_prompt
             or not all(isinstance(v, str) and v for v in (run_id, run_instance_id, task, condition))):
         raise ValueError('Explicit identity, partition, boundary and continuous budget required')
     directory.mkdir(mode=0o700, parents=True, exist_ok=False)
-    for name, text in [('initial.txt', initial_prompt), ('additional.txt', additional_prompt)]:
+    for name, text in [('initial.txt', initial_prompt)] + ([] if control else [('additional.txt', additional_prompt)]):
         with os.fdopen(os.open(directory/name, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), 'w', encoding='utf-8', newline='') as stream:
             stream.write(text); stream.flush(); os.fsync(stream.fileno())
     contract = {'schema_version': 1, 'kind': 'one_additional_input_v1', 'run_id': run_id,
@@ -101,7 +138,10 @@ def create(directory, *, run_id, run_instance_id, task, condition, workspace, wo
         'boundary_contract': boundary_contract, 'partition': partition, 'delivery_id': uuid.uuid4().hex,
         'artifact_collection_policy':util.resolve_collection_policy(artifact_collection_policy),
         'initial_sha256': util.sha256_file(directory/'initial.txt'),
-        'additional_sha256': util.sha256_file(directory/'additional.txt')}
+        'additional_sha256': None if control else util.sha256_file(directory/'additional.txt')}
+    if observed(boundary_contract):
+        contract.update(kind=OBSERVED_KIND, presentation_mode='full_initial_no_additional' if control else 'staged_once',
+                        planned_additional_count=0 if control else 1)
     util.write_new_json(directory/'contract.json', contract)
     controller = Controller(directory)
     with ownership.lease(directory): controller._append('planned', {})
@@ -115,7 +155,14 @@ class Controller:
         self.monotonic = monotonic
         self.contract = util.read_json(self.root/'contract.json')
         self.contract_sha256 = util.sha256_file(self.root/'contract.json')
-        for name in ('initial', 'additional'):
+        if observed(self.contract['boundary_contract']) and (self.contract.get('kind')!=OBSERVED_KIND
+                or self.contract.get('presentation_mode') not in ('staged_once','full_initial_no_additional')
+                or self.contract.get('planned_additional_count') != (0 if no_additional(self.contract) else 1)):
+            raise ValueError('Explicit observed presentation mode and count required')
+        if no_additional(self.contract) and ((self.root/'additional.txt').exists()
+                or self.contract.get('kind') != OBSERVED_KIND or self.contract['additional_sha256'] is not None):
+            raise ValueError('Control must not contain a later prompt')
+        for name in (('initial',) if no_additional(self.contract) else ('initial', 'additional')):
             if util.sha256_file(self.root/(name+'.txt')) != self.contract[name+'_sha256']:
                 raise ValueError('Immutable prompt identity changed')
         if any(self.root.is_relative_to(Path(p).resolve()) or Path(p).resolve().is_relative_to(self.root)
@@ -142,7 +189,7 @@ class Controller:
             util.write_json_atomic(root/'manifest.json', manifest)
 
     def audit_mounts(self):
-        future = (self.root/'additional.txt').read_bytes().decode('utf-8')
+        future = None if no_additional(self.contract) else (self.root/'additional.txt').read_bytes().decode('utf-8')
         def strings(value):
             if isinstance(value, str): yield value
             elif isinstance(value, dict):
@@ -154,11 +201,11 @@ class Controller:
             for path in root.rglob('*'):
                 if not path.is_file(): continue
                 raw = path.read_bytes()
-                if future.encode() in raw: raise ValueError('Future input leaked into worker mount')
+                if future and future.encode() in raw: raise ValueError('Future input leaked into worker mount')
                 if path.suffix == '.json':
                     try: data = json.loads(raw)
                     except (ValueError, UnicodeError): continue
-                    if any(future in value for value in strings(data)):
+                    if future and any(future in value for value in strings(data)):
                         raise ValueError('Future input leaked through serialized worker metadata')
 
     def events(self):
@@ -279,6 +326,7 @@ class Controller:
         delivery. A process crash after intent cannot cause an automatic retry.
         """
         with ownership.lease(self.root):
+            if no_additional(self.contract): raise ValueError('Control cannot dispatch an additional message')
             events = self.events()
             boundaries = [e for e in events if e['kind'] == 'boundary_observed']
             if len(boundaries) != 1 or any(e['kind'] in ('send_intent', 'terminal') for e in events):
@@ -286,7 +334,7 @@ class Controller:
             if (self.root/'stop-request.json').exists() or not self.remaining():
                 raise ValueError('Stopped or expired before additional input')
             if self.contract['boundary_contract'].get('transport') == 'opencode-server-response-barrier-v1':
-                checkpoints=[e for e in events if e['kind']=='checkpoint' and e['label']=='before-additional'
+                checkpoints=[e for e in events if e['kind']=='checkpoint' and e['label']==checkpoint_labels(self.contract)[1]
                     and (e['archive'] or group_boundary(self.contract['boundary_contract']))]
                 if len(checkpoints)!=1:raise ValueError('Restorable pre-input checkpoint required before dispatch')
             payload = {k: self.contract[k] for k in ('run_id', 'run_instance_id', 'workspace', 'delivery_id')}
@@ -311,6 +359,29 @@ class Controller:
             except Exception as error:
                 self._append('delivery_unknown', {'error_type': type(error).__name__})
             return self.status()
+
+    def resume_action(self):
+        """Durable action before releasing the fence; never a fabricated native ACK."""
+        with ownership.lease(self.root):
+            events = self.events()
+            boundaries = [e for e in events if e['kind']=='boundary_observed']
+            checkpoints = [e for e in events if e['kind']=='checkpoint' and e['label']=='before-resume']
+            if (not observed(self.contract['boundary_contract']) or len(boundaries)!=1 or len(checkpoints)!=1
+                    or any(e['kind'] in ('resumption_action','terminal') for e in events)
+                    or (self.root/'stop-request.json').exists() or not self.remaining()):
+                raise ValueError('One live observed boundary and pre-resume checkpoint required')
+            control = no_additional(self.contract)
+            acks = [e for e in events if e['kind']=='acknowledged']
+            if (control and any(e['kind'] in ('send_intent','acknowledged') for e in events)) or (not control and len(acks)!=1):
+                raise ValueError('Presentation action does not match native input evidence')
+            action = dict(run_id=self.contract['run_id'], run_instance_id=self.contract['run_instance_id'],
+                contract_sha256=self.contract_sha256, native_session_id=boundaries[0]['native_session_id'],
+                barrier_id=boundaries[0]['fence']['barrier_id'], request_id=boundaries[0]['fence']['request_id'],
+                checkpoint_receipt_sha256=checkpoints[0]['receipt_sha256'],
+                action='no_input_by_design' if control else 'additional_input_acknowledged',
+                native_message_id=None if control else acks[0]['native_message_id'])
+            self._append('resumption_action', {'action':action,'action_sha256':digest(action)})
+            return action
 
     def stop(self, reason):
         # Independent of a blocked send lock. Native/gateway shutdown remains
@@ -337,7 +408,7 @@ class Controller:
         return {'contract_sha256': self.contract_sha256, 'run_id': self.contract['run_id'],
             'run_instance_id': self.contract['run_instance_id'], 'delivery_id': self.contract['delivery_id'],
             'boundary_reached': 'boundary_observed' in kinds,
-            'delivery_state': 'acknowledged' if 'acknowledged' in kinds else 'unknown' if 'send_intent' in kinds and 'known_no_send' not in kinds else 'not_sent',
+            'delivery_state': 'not_applicable' if no_additional(self.contract) else 'acknowledged' if 'acknowledged' in kinds else 'unknown' if 'send_intent' in kinds and 'known_no_send' not in kinds else 'not_sent',
             'stop_requested': (self.root/'stop-request.json').exists(), 'terminal': terminal,
             'retry_allowed': False, 'deadline_unix': start['deadline_unix'] if start else None,
             'elapsed_seconds': terminal['at_monotonic']-start['at_monotonic'] if terminal and start else None}

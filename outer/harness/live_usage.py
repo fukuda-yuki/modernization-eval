@@ -141,6 +141,53 @@ def reconcile(started, ended, run_id, session_id=None):
     return events, sorted(set(issues))
 
 
+def native_completion(root, manifest):
+    """Use retained native originals; attach JSONL may miss an immediate idle.
+
+    New observation contracts also retain the unpaginated native message API.
+    This is a separate proof source, never synthesized CLI events.
+    """
+    from . import staged_input
+    root=Path(root);native,errors=journal(root/'evidence/agent.jsonl')
+    sessions=sorted({e['sessionID'] for e in native if isinstance(e.get('sessionID'),str)})
+    steps=sum(e.get('type')=='step_finish' for e in native)
+    result=dict(sessions=sessions,steps=steps,source='native_cli_jsonl',errors=errors)
+    reference=manifest.get('staged_input')
+    if not reference:return result
+    try:
+        path=Path(reference['contract_path'])
+        if util.sha256_file(path)!=reference['contract_sha256']:raise ValueError('Changed native contract')
+        controller=staged_input.Controller(path.parent)
+        if not staged_input.observed(controller.contract['boundary_contract']):return result
+        ledger=controller.events();receipts=[e for e in ledger if e['kind']=='native_message_inventory']
+        bound=[e['native_session_id'] for e in ledger if e['kind']=='native_session']
+        messages_path=controller.root/'native-messages.json'
+        if (len(receipts)!=1 or receipts[0].get('client_finished') is not True or len(bound)!=1
+                or receipts[0].get('native_session_id')!=bound[0]
+                or util.sha256_file(messages_path)!=receipts[0]['sha256']
+                or (sessions and sessions!=bound)):
+            raise ValueError('Unverified complete native message inventory')
+        messages=util.read_json(messages_path);parts=[];ids=[]
+        for message in messages:
+            info=message['info'];ids.append(info['id'])
+            if info['sessionID']!=bound[0] or not info['id']:raise ValueError('Foreign native message')
+            for part in message['parts']:
+                if part.get('messageID')!=info['id'] or part.get('sessionID')!=bound[0]:
+                    raise ValueError('Foreign native message part')
+                parts.append(part)
+        if len(set(ids))!=len(ids):raise ValueError('Duplicate native message')
+        step_parts=[p for p in parts if p['type']=='step-finish']
+        step_ids=[p['id'] for p in step_parts]
+        if (len(set(step_ids))!=len(step_ids) or not step_ids
+                or any(e.get('part',{}).get('id') not in step_ids for e in native if e.get('type')=='step_finish')):
+            raise ValueError('Native completion inventory conflicts with CLI events')
+        return dict(sessions=bound,steps=len(step_parts),source='native_message_inventory',errors=errors,
+                    sha256=receipts[0]['sha256'])
+    except (OSError,ValueError,KeyError,TypeError):
+        result['errors']=errors+['native_message_inventory_unverified']
+        return result
+
+
 def staged_evidence(root, manifest, events, native_sessions):
     """Bind controller intent, native ACK and independently retained gateway bytes.
 
@@ -158,11 +205,13 @@ def staged_evidence(root, manifest, events, native_sessions):
             raise ValueError('Staged contract changed')
         controller = staged_input.Controller(contract_path.parent)
         contract = controller.contract; state = controller.status(); ledger = controller.events()
+        resumption = staged_input.observed(contract['boundary_contract'])
+        control = staged_input.no_additional(contract)
         if (contract['run_id'], contract['run_instance_id']) != (manifest['run_id'], manifest['run_instance_id']):
             raise ValueError('Staged Run identity mismatch')
         if util.sha256_file(root/'inputs/prompt.txt') != contract['initial_sha256']:
             raise ValueError('Staged initial input mismatch')
-        expected = (controller.root/'additional.txt').read_bytes().decode('utf-8')
+        expected = None if control else (controller.root/'additional.txt').read_bytes().decode('utf-8')
         records, journal_errors = journal(raw/'staged-input.jsonl'); errors += journal_errors
         arms = [r for r in records if r.get('kind') == 'armed']
         plans = [r for r in records if r.get('kind') == 'planned']
@@ -174,6 +223,10 @@ def staged_evidence(root, manifest, events, native_sessions):
         proof_by_request = {r.get('request_id'): r for r in observed}
         if len(proof_by_request) != len(observed): errors.append('stage_duplicate_request_proof')
         intents = [e for e in ledger if e['kind'] == 'send_intent']
+        actions = [e for e in ledger if e['kind']=='resumption_action']
+        action = actions[0]['action'] if len(actions)==1 else None
+        if len(actions)>1 or (control and (arms or intents or any(e['kind']=='acknowledged' for e in ledger))):
+            errors.append('stage_unexpected_input_or_duplicate_action')
         boundaries = [e for e in ledger if e['kind'] == 'boundary_observed']
         sessions = [e['native_session_id'] for e in ledger if e['kind'] == 'native_session']
         if len(sessions) != 1 or native_sessions != sessions:
@@ -221,7 +274,8 @@ def staged_evidence(root, manifest, events, native_sessions):
                     ends=[e for e in ledger if e['kind']=='worker_resumed' and
                           e.get('worker')==pause.get('worker') and
                           e['sequence']>boundaries[0]['sequence'] and
-                          (not intents or e['sequence']<intents[0]['sequence'])]
+                          (not intents or e['sequence']<intents[0]['sequence']) and
+                          (not actions or e['sequence']<actions[0]['sequence'])]
                     if (pause.get('paused') is not True or pause.get('run_instance_id')!=contract['run_instance_id']
                             or len(starts)!=1 or starts[0]['sequence']>=boundaries[0]['sequence']
                             or len(ends)!=1 or ends[0].get('paused') is not False):
@@ -237,14 +291,15 @@ def staged_evidence(root, manifest, events, native_sessions):
                         errors.append('stage_boundary_response_original')
                 acks = [e for e in ledger if e['kind']=='acknowledged']
                 releases = [r for r in released if r['barrier_id']==fence['barrier_id']]
-                if releases and (len(acks)!=1 or releases[0].get('native_message_id')!=acks[0]['native_message_id']):
+                if releases and not control and (len(acks)!=1 or releases[0].get('native_message_id')!=acks[0]['native_message_id']):
                     errors.append('stage_release_without_native_ack')
         first_observed = first_transmitted = None
         for event in events:
             path = raw/event['request_file']
             if Path(event['request_file']).name != event['request_file'] or util.sha256_file(path) != event['request_sha256']:
                 raise ValueError('Staged request original mismatch')
-            proof = gateway.check_additional_input(util.read_json(path), expected)
+            proof = gateway.check_additional_input(util.read_json(path), expected) if not control else {
+                'verified':False,'locations':[], 'not_applicable':'no_input_by_design'}
             receipt = proof_by_request.get(event['request_id'])
             if receipt and (receipt['request_sha256'] != event['request_sha256'] or receipt['receipt'] != proof):
                 errors.append('stage_request_proof_mismatch')
@@ -268,10 +323,18 @@ def staged_evidence(root, manifest, events, native_sessions):
         artifacts=staged_artifacts.summary(controller,(state.get('terminal') or {}).get('reason'))
         if state.get('terminal') and state['terminal'].get('checkpoints')!=artifacts:
             errors.append('stage_checkpoint_terminal_mismatch')
-        post=artifacts['after-additional']
-        if post.get('archive'):
+        post=artifacts[staged_input.checkpoint_labels(contract)[2]]
+        first_post_resume = None
+        native_input_inventory = None
+        if resumption:
+            first_post_resume, native_input_inventory, faults = resumption_evidence(
+                controller, ledger, records, barriers, events, sessions, artifacts)
+            errors += faults
+        if post.get('binding') if resumption else post.get('archive'):
             fence=post['binding']['fence']
-            if not first_observed or fence.get('first_additional_request_id')!=first_observed['request_id']:
+            first = first_post_resume if resumption else first_observed
+            request_key = 'first_post_resume_request_id' if resumption else 'first_additional_request_id'
+            if not first or fence.get(request_key)!=first['request_id']:
                 errors.append('stage_checkpoint_before_observed_input')
             found=[b for b in barriers if b.get('kind')=='released' and b['barrier_id']==fence['barrier_id']]
             if len(found)!=1 or found[0].get('capture_complete') is not True:
@@ -280,13 +343,85 @@ def staged_evidence(root, manifest, events, native_sessions):
             'checkpoints':artifacts,
             'native_acknowledged': any(e['kind'] == 'acknowledged' for e in ledger),
             'first_observed_request': first_observed, 'first_transmitted_request': first_transmitted,
-            'additional_input_reached': bool(first_transmitted) and not errors,
+            'additional_input_reached': None if control else bool(first_transmitted) and not errors,
             'controller_ledger_sha256': util.sha256_file(controller.root/'events.jsonl'),
             'gateway_ledger_sha256': util.sha256_file(raw/'staged-input.jsonl') if (raw/'staged-input.jsonl').exists() else None,
             'issues': sorted(set(errors)), 'usage_scope': 'all requests from the original Run; never reset per stage'}
+        if resumption:
+            value.update(presentation_mode=contract['presentation_mode'],planned_additional_count=0 if control else 1,
+                native_acknowledged=None if control else value['native_acknowledged'],
+                no_input_by_design=control, resumption_action=action,
+                first_post_resume_request=first_post_resume,native_input_inventory=native_input_inventory,
+                zero_additional_verified=(not errors and native_input_inventory is not None) if control else None)
         return value, errors
     except (OSError, ValueError, KeyError, TypeError) as error:
         return {'additional_input_reached': False, 'evidence_error_type': type(error).__name__}, ['stage_evidence_unverified']
+
+
+def resumption_evidence(controller, ledger, records, barriers, events, sessions, artifacts):
+    """Verify zero/one external inputs and the separately observed resume request."""
+    from . import staged_input
+    contract=controller.contract;errors=[];first=None;inventory=None
+    actions=[e for e in ledger if e['kind']=='resumption_action']
+    releases=[r for r in barriers if r.get('kind')=='released' and r.get('resume_action') is not None]
+    control=staged_input.no_additional(contract)
+    if len(actions)!=len(releases) or len(actions)>1:errors.append('stage_resumption_action_unverified')
+    if actions:
+        action=actions[0]['action'];boundary=next(e for e in ledger if e['kind']=='boundary_observed')
+        before=[e for e in ledger if e['kind']=='checkpoint' and e['label']=='before-resume']
+        expected=dict(run_id=contract['run_id'],run_instance_id=contract['run_instance_id'],
+            contract_sha256=controller.contract_sha256,native_session_id=sessions[0],
+            barrier_id=boundary['fence']['barrier_id'],request_id=boundary['fence']['request_id'],
+            action='no_input_by_design' if control else 'additional_input_acknowledged')
+        acks=[e for e in ledger if e['kind']=='acknowledged']
+        expected['native_message_id']=None if control else (acks[0]['native_message_id'] if len(acks)==1 else None)
+        expected['checkpoint_receipt_sha256']=before[0]['receipt_sha256'] if len(before)==1 else None
+        if (action!=expected or actions[0]['action_sha256']!=staged_input.digest(action)
+                or not before or before[0]['sequence']>=actions[0]['sequence']
+                or any(r['resume_action']!=action or r['barrier_id']!=action['barrier_id']
+                    or datetime.fromisoformat(r['at']).timestamp()<actions[0]['at_unix'] for r in releases)):
+            errors.append('stage_resumption_action_binding')
+    checked=[r for r in records if r.get('kind')=='request_checked']
+    flagged=[r for r in checked if r.get('first_post_resume')]
+    after=[r for r in checked if r.get('after_resume')]
+    if flagged!=after[:1] or (after and not releases):errors.append('stage_first_post_resume_binding')
+    for record in checked:
+        after_release=bool(releases and datetime.fromisoformat(record['at'])>datetime.fromisoformat(releases[0]['at']))
+        if type(record.get('after_resume')) is not bool or record['after_resume']!=after_release:
+            errors.append('stage_request_resume_phase_mismatch')
+    if after:
+        record=after[0];matches=[e for e in events if e['request_id']==record['request_id']]
+        if (len(matches)!=1 or matches[0]['request_sha256']!=record['request_sha256']
+                or not releases or datetime.fromisoformat(matches[0]['started_at'])<=datetime.fromisoformat(releases[0]['at'])):
+            errors.append('stage_post_resume_request_original')
+        else:
+            first={k:matches[0][k] for k in ('request_id','request_sha256','started_at')}
+            first['send_evidence']=matches[0].get('send_evidence','unknown')
+    receipts=[e for e in ledger if e['kind']=='native_message_inventory']
+    if len(receipts)!=1 or receipts[0].get('client_finished') is not True:
+        errors.append('stage_native_input_inventory_unknown')
+    else:
+        path=controller.root/'native-messages.json'
+        if util.sha256_file(path)!=receipts[0]['sha256']:raise ValueError('Native message inventory changed')
+        messages=util.read_json(path);users=[];seen=set()
+        for message in messages:
+            info=message['info'];parts=message['parts']
+            if info['sessionID'] not in sessions or info['id'] in seen:
+                errors.append('stage_native_input_inventory_identity')
+            seen.add(info['id'])
+            if info['role']=='user' and not (parts and all(p.get('synthetic') is True for p in parts)):
+                texts=[p['text'] for p in parts if p.get('type')=='text' and p.get('synthetic') is not True]
+                users.append(dict(native_message_id=info['id'],sha256=util.sha256_bytes(''.join(texts).encode()),
+                    text_parts=len(texts)))
+        expected=[contract['initial_sha256']]
+        acks=[e for e in ledger if e['kind']=='acknowledged']
+        if not control and acks:expected.append(contract['additional_sha256'])
+        if ([u['sha256'] for u in users]!=expected or any(u['text_parts']!=1 for u in users)
+                or (acks and (len(users)!=2 or users[-1]['native_message_id']!=acks[0]['native_message_id']))):
+            errors.append('stage_native_external_message_mismatch')
+        inventory={'sha256':receipts[0]['sha256'],'external_user_messages':users,
+                   'planned_additional_count':0 if control else 1}
+    return first,inventory,errors
 
 
 def collect(root):
@@ -365,9 +500,9 @@ def collect(root):
                {x['source'] for x in matches} == {x['source'] for x in context['blocks']})
     reached = reached and prompt_reached
     # Agent-native identifiers are kept separate from the gateway's logical session ID.
-    native, _ = journal(root / 'evidence/agent.jsonl')
-    native_sessions = sorted({e['sessionID'] for e in native if isinstance(e.get('sessionID'), str)})
-    native_steps = sum(e.get('type') == 'step_finish' for e in native)
+    completion=native_completion(root,manifest)
+    native_sessions=completion['sessions'];native_steps=completion['steps']
+    issues += completion['errors']
     if len(native_sessions) != 1 or native_steps == 0:
         issues.append('native_agent_completion_unverified')
     if native_steps > len(ends):
@@ -375,7 +510,7 @@ def collect(root):
     stages, stage_issues = staged_evidence(root, manifest, events, native_sessions)
     issues += stage_issues
     if stages is not None:
-        reached = reached and stages['additional_input_reached']
+        reached = reached and (not stage_issues if stages.get('presentation_mode') else stages['additional_input_reached'])
         util.write_json_atomic(root/'usage/staged-input-evidence.json', stages)
     util.write_json_atomic(root / 'usage/context-evidence.json', {
         'method': context['method'], 'input_reached': reached, 'blocks': matches,
@@ -386,6 +521,7 @@ def collect(root):
         'schema_version': 2, 'run_id': manifest['run_id'], 'source': 'sample2-gateway',
         'native_agent_session_ids': native_sessions,
         'native_step_count': native_steps,
+        'native_completion_source':completion['source'],
         'run_instance_id': manifest.get('run_instance_id'),
         'expected_sessions': [session_id], 'inventory_complete': not issues,
         'inventory_complete_basis': {'issues': sorted(set(issues)), 'started_count': len(starts),

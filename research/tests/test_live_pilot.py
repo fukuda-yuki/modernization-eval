@@ -394,7 +394,17 @@ class PlanBoundaries(unittest.TestCase):
 
     def test_staged_early_completion_is_retained_without_claiming_additional_delivery(self):
         _,_,binding,root=self.terminal()
-        manifest=util.read_json(root/'manifest.json');manifest['staged_input']={'contract_path':'synthetic'}
+        from outer.harness import staged_input
+        for name in ('inputs','state','workspace'):(root/name).mkdir(exist_ok=True)
+        initial,additional,partition=staged_input.split_sections(
+            [dict(id='a',text='toy first'),dict(id='b',text='toy later')],['a'],['b'])
+        controller=staged_input.create(root/'_controller/staged-input',run_id=binding['run_id'],
+            run_instance_id=binding['run_instance_id'],task='toy',condition='staged-explore',
+            workspace=root/'workspace',worker_roots=[root/'inputs',root/'state'],
+            initial_prompt=initial,additional_prompt=additional,budget_seconds=30,
+            boundary_contract={'snapshot_policy_sha256':'synthetic'},partition=partition)
+        manifest=util.read_json(root/'manifest.json');manifest['staged_input']={
+            'contract_path':str(controller.root/'contract.json'),'contract_sha256':controller.contract_sha256}
         util.write_json_atomic(root/'manifest.json',manifest)
         normalized=util.read_json(root/'usage/normalized.json')
         normalized.update(input_reached=False,staged_input=dict(issues=[],additional_input_reached=False,

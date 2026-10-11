@@ -143,15 +143,24 @@ class Gateway(ThreadingHTTPServer):
         self.stage_busy_request = None
         self.stage_capture_complete = False
         self.stage_native_message_id = None
+        self.stage_resume_action = None
+        self.stage_first_post_resume_request = None
         if staged_input:
             directory = Path(staged_input)
             contract_raw = (directory/'contract.json').read_bytes()
             contract = json.loads(contract_raw)
-            additional = (directory/'additional.txt').read_bytes().decode('utf-8')
-            if (contract.get('kind') != 'one_additional_input_v1'
+            observed = contract.get('kind') == 'observed_presentation_v1'
+            control = observed and contract.get('presentation_mode') == 'full_initial_no_additional'
+            additional = None if control else (directory/'additional.txt').read_bytes().decode('utf-8')
+            if (contract.get('kind') not in ('one_additional_input_v1', 'observed_presentation_v1')
+                    or (observed and (contract.get('presentation_mode') not in ('staged_once','full_initial_no_additional')
+                        or contract.get('planned_additional_count') != (0 if control else 1)
+                        or contract['boundary_contract'].get('observation_policy') != 'resumption_first_change_v1'
+                        or contract['boundary_contract'].get('boundary_policy') != 'response_tool_group_pause_v1'))
                     or (contract['run_id'], contract['run_instance_id']) != (run_id, self.session_id)
-                    or not additional or not self.expected_prompt
-                    or hashlib.sha256(additional.encode()).hexdigest() != contract['additional_sha256']
+                    or not self.expected_prompt
+                    or (control and (contract['additional_sha256'] is not None or (directory/'additional.txt').exists()))
+                    or (not control and (not additional or hashlib.sha256(additional.encode()).hexdigest() != contract['additional_sha256']))
                     or hashlib.sha256(self.expected_prompt.encode()).hexdigest() != contract['initial_sha256']):
                 raise ValueError('Staged input identity mismatch')
             self.stage = {**contract, 'contract_sha256': hashlib.sha256(contract_raw).hexdigest(), 'text': additional}
@@ -162,11 +171,14 @@ class Gateway(ThreadingHTTPServer):
     def uses_response_barrier(self):
         return self.stage and self.stage['boundary_contract'].get('transport') == 'opencode-server-response-barrier-v1'
 
+    def observes_resumption(self):
+        return self.stage and self.stage.get('kind') == 'observed_presentation_v1'
+
     def inspect_stage_barrier(self):
         with self.admission_lock:
             return dict(self.stage_barrier) if self.stage_barrier else None
 
-    def release_stage_barrier(self, barrier_id, native_message_id=None, capture_complete=False):
+    def release_stage_barrier(self, barrier_id, native_message_id=None, capture_complete=False, resume_action=None):
         with self.admission_lock:
             if (not self.stage_barrier or self.stage_barrier['barrier_id'] != barrier_id
                     or self.stage_barrier_event.is_set()
@@ -174,12 +186,33 @@ class Gateway(ThreadingHTTPServer):
                 raise ValueError('No matching open response barrier')
             if self.stage_arm and not native_message_id:
                 raise ValueError('Native input acknowledgement required before releasing an armed barrier')
+            if self.stage.get('presentation_mode') == 'full_initial_no_additional' and native_message_id is not None:
+                raise ValueError('Zero-input control cannot supply a native input acknowledgement')
             if self.stage_native_message_id and native_message_id != self.stage_native_message_id:
                 raise ValueError('Native acknowledgement changed at later boundary')
-            if capture_complete and self.stage_barrier.get('phase') != 'after_additional':
+            if resume_action is not None:
+                control = self.stage.get('presentation_mode') == 'full_initial_no_additional'
+                expected = {'run_id':self.run_id, 'run_instance_id':self.session_id,
+                    'contract_sha256':self.stage['contract_sha256'],
+                    'barrier_id':barrier_id, 'request_id':self.stage_barrier['request_id'],
+                    'action':'no_input_by_design' if control else 'additional_input_acknowledged',
+                    'native_message_id':None if control else native_message_id}
+                if (not self.observes_resumption() or self.stage_resume_action is not None
+                        or set(resume_action) != set(expected)|{'native_session_id','checkpoint_receipt_sha256'}
+                        or any(resume_action.get(k)!=v for k,v in expected.items())
+                        or not resume_action['native_session_id'] or not resume_action['checkpoint_receipt_sha256']
+                        or (control and (native_message_id is not None or self.stage_arm is not None))
+                        or (not control and (not self.stage_arm or not native_message_id
+                            or resume_action['native_session_id'] != self.stage_arm['native_session_id']))):
+                    raise ValueError('Invalid or repeated resumption action')
+            if self.observes_resumption() and self.stage_arm and not self.stage_resume_action and resume_action is None:
+                raise ValueError('Acknowledged input requires an explicit resumption action')
+            if capture_complete and self.stage_barrier.get('phase') != ('after_resume' if self.observes_resumption() else 'after_additional'):
                 raise ValueError('Post-input checkpoint cannot precede an observed additional request')
             self.record('response-barriers.jsonl', {'kind':'released', 'at':now(),
-                **self.stage_barrier, 'native_message_id':native_message_id,'capture_complete':capture_complete})
+                **self.stage_barrier, 'native_message_id':native_message_id,'capture_complete':capture_complete,
+                **({'resume_action':resume_action} if self.observes_resumption() else {})})
+            if resume_action is not None:self.stage_resume_action=dict(resume_action)
             if native_message_id:self.stage_native_message_id=native_message_id
             if capture_complete:self.stage_capture_complete=True
             self.stage_busy_request = None
@@ -197,6 +230,9 @@ class Gateway(ThreadingHTTPServer):
                 'run_id':self.run_id, 'run_instance_id':self.session_id,
                 'phase':'after_additional' if self.stage_first_request else 'before_additional',
                 'first_additional_request_id':self.stage_first_request}
+            if self.observes_resumption():
+                self.stage_barrier.update(phase='after_resume' if self.stage_first_post_resume_request else 'before_resume',
+                    first_post_resume_request_id=self.stage_first_post_resume_request)
             self.record('response-barriers.jsonl', {'kind':'held','at':now(),**self.stage_barrier})
         if (not self.stage_barrier_event.wait(self.stage['budget_seconds'])
                 or self.stopping.is_set() or self.admission_closed.is_set()):
@@ -206,7 +242,8 @@ class Gateway(ThreadingHTTPServer):
     def arm_stage(self, body):
         """Controller-only intent; this does not prove native or provider receipt."""
         with self.admission_lock:
-            if not self.stage or self.admission_closed.is_set() or self.stopping.is_set() or self.failed.is_set():
+            if (not self.stage or self.stage.get('presentation_mode') == 'full_initial_no_additional'
+                    or self.admission_closed.is_set() or self.stopping.is_set() or self.failed.is_set()):
                 raise ValueError('Staged input closed')
             expected = {k: self.stage[k] for k in ('run_id', 'run_instance_id', 'delivery_id', 'contract_sha256', 'additional_sha256')}
             if (set(body) != set(expected) | {'native_session_id', 'barrier_id'}
@@ -305,7 +342,7 @@ class Handler(BaseHTTPRequestHandler):
                 if body.get('run_id')!=g.run_id or body.get('run_instance_id')!=g.session_id: raise ValueError()
                 if body.get('action')=='inspect': result=g.inspect_stage_barrier()
                 elif body.get('action')=='release':
-                    g.release_stage_barrier(body['barrier_id'],body.get('native_message_id'),body.get('capture_complete',False)); result={'released':True}
+                    g.release_stage_barrier(body['barrier_id'],body.get('native_message_id'),body.get('capture_complete',False),body.get('resume_action')); result={'released':True}
                 else: raise ValueError()
             except (ValueError,TypeError,OSError,KeyError):
                 self.send_error(403,'Staged barrier unavailable');return
@@ -415,7 +452,8 @@ class Handler(BaseHTTPRequestHandler):
                         raise ValueError('Concurrent request crossed the staged response fence')
                     g.stage_busy_request = rid
                 if g.stage is not None:
-                    receipt = check_additional_input(body, g.stage['text'])
+                    receipt = check_additional_input(body, g.stage['text']) if g.stage['text'] is not None else {
+                        'verified':False,'locations':[], 'not_applicable':'no_input_by_design'}
                     reason = ('early_input' if receipt['locations'] and g.stage_arm is None else
                               'duplicate_or_wrong_role' if receipt['locations'] and not receipt['verified'] else
                               'boundary_missed' if g.stage_arm and not g.stage_first_request and not receipt['verified'] else None)
@@ -424,6 +462,11 @@ class Handler(BaseHTTPRequestHandler):
                         'contract_sha256': g.stage['contract_sha256'], 'run_id': g.run_id,
                         'run_instance_id': g.session_id, 'native_session_id': (g.stage_arm or {}).get('native_session_id'),
                         'receipt': receipt, 'rejection': reason}
+                    if g.observes_resumption():
+                        stage_record.update(after_resume=g.stage_resume_action is not None,
+                            first_post_resume=bool(g.stage_resume_action and not g.stage_first_post_resume_request))
+                        if g.stage_resume_action and not g.stage_first_post_resume_request:
+                            g.stage_first_post_resume_request=rid
                     g.record('staged-input.jsonl', stage_record)
                     if reason: raise ValueError('Staged input request denied')
                     if receipt['verified']:

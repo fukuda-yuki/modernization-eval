@@ -72,13 +72,12 @@ def validate_authorization(repo, root, manifest, controller, condition):
             or (Path(config['root'])/'STOP').exists()):
         raise ValueError('Staged activation requires an admitted dispatch and an open campaign')
     partition_plan = util.read_json(live_pilot.checked(epoch['staged_inputs'][manifest['task_id']]))
-    initial, additional, partition = staged_input.request_partition(condition['migration_request'],partition_plan)
-    from . import profiles
-    prompt, _ = profiles.prepare_prompt({**condition,'migration_request':initial},Path(root)/'inputs/legacy-source')
-    partition = {**partition,'request_initial_sha256':partition['initial_sha256'],
-                 'initial_sha256':util.sha256_bytes(prompt.encode())}
+    prompt, _, additional, partition = staged_input.prepare_presentation(condition, partition_plan, Path(root)/'inputs/legacy-source')
     if (controller.contract['partition'] != partition
-            or controller.contract['additional_sha256'] != util.sha256_bytes(additional.encode())
+            or (staged_input.observed(partition_plan['boundary_contract']) and controller.contract.get('presentation_mode')
+                != ('full_initial_no_additional' if additional is None else 'staged_once'))
+            or controller.contract['initial_sha256'] != util.sha256_bytes(prompt.encode())
+            or controller.contract['additional_sha256'] != (None if additional is None else util.sha256_bytes(additional.encode()))
             or controller.contract['boundary_contract'] != partition_plan['boundary_contract']):
         raise ValueError('Staged transport/partition differs from the approved plan')
 
@@ -114,10 +113,11 @@ class DockerTransport:
         return self.api('gateway','/control/staged-barrier',{'action':'inspect',
             'run_id':self.state['run_id'],'run_instance_id':self.state['run_instance_id']})
 
-    def release(self, barrier_id, native_message_id=None, capture_complete=False):
+    def release(self, barrier_id, native_message_id=None, capture_complete=False, resume_action=None):
         return self.api('gateway','/control/staged-barrier',{'action':'release','barrier_id':barrier_id,
             'run_id':self.state['run_id'],'run_instance_id':self.state['run_instance_id'],
-            'native_message_id':native_message_id,'capture_complete':capture_complete})
+            'native_message_id':native_message_id,'capture_complete':capture_complete,
+            **({'resume_action':resume_action} if resume_action is not None else {})})
 
     def children(self):
         self.owned('worker')
@@ -190,6 +190,10 @@ class DockerTransport:
 def observe_boundary(controller, transport, barrier, events, before, *, after_delivery=False):
     """One whole model response's tools must terminate before considering mutation."""
     contract = controller.contract
+    observed = staged_input.observed(contract['boundary_contract'])
+    labels = staged_input.checkpoint_labels(contract)
+    post_phase = 'after_resume' if observed else 'after_additional'
+    request_key = 'first_post_resume_request_id' if observed else 'first_additional_request_id'
     sessions = {e['sessionID'] for e in events if 'sessionID' in e}
     session = next(e['native_session_id'] for e in controller.events() if e['kind']=='native_session')
     if not sessions:return before,False
@@ -236,12 +240,12 @@ def observe_boundary(controller, transport, barrier, events, before, *, after_de
                      'tools':[{'tool_call_id':p['callID'],'message_id':p['messageID'],
                                'tool_status':p['state']['status']} for p in parts]}
             if after_delivery:
-                if barrier.get('phase')!='after_additional' or not barrier.get('first_additional_request_id'):
+                if barrier.get('phase')!=post_phase or not barrier.get(request_key):
                     raise ValueError('Post-input checkpoint lacks observed request binding')
-                controller.checkpoint('after-additional',binding)
+                controller.checkpoint(labels[2],binding)
             else:
                 controller.boundary(parts,before,after,fence)
-                controller.checkpoint('before-additional',binding)
+                controller.checkpoint(labels[1],binding)
     if changed and not grouped and len(parts) != 1:
         # Simultaneous tools cannot be individually attributed by a global file
         # diff. Retain this ambiguity instead of moving to a later boundary.
@@ -249,14 +253,14 @@ def observe_boundary(controller, transport, barrier, events, before, *, after_de
         raise ValueError('First mutation attribution ambiguous across parallel tools')
     if changed:
         if after_delivery:
-            if barrier.get('phase')!='after_additional' or not barrier.get('first_additional_request_id'):
+            if barrier.get('phase')!=post_phase or not barrier.get(request_key):
                 raise ValueError('Post-input checkpoint lacks observed request binding')
             if not grouped:
                 controller.checkpoint('after-additional',{'fence':barrier,'native_session_id':session,
                     'tool_call_id':parts[0]['callID'],'message_id':parts[0]['messageID'],
                     'before':before,'after':after,'tool_status':parts[0]['state']['status']})
-            ack=next(e for e in controller.events() if e['kind']=='acknowledged')
-            transport.release(barrier['barrier_id'],ack['native_message_id'],capture_complete=True)
+            ack=next((e for e in controller.events() if e['kind']=='acknowledged'),None)
+            transport.release(barrier['barrier_id'],ack['native_message_id'] if ack else None,capture_complete=True)
             return after,True
         if not grouped:
             controller.boundary(parts[0],before,after,{**barrier,'native_session_id':session,
@@ -264,14 +268,18 @@ def observe_boundary(controller, transport, barrier, events, before, *, after_de
                 'completed_tool_call_ids':ids})
             controller.checkpoint('before-additional',{'fence':barrier,'native_session_id':session,
                 'tool_call_id':parts[0]['callID'],'message_id':parts[0]['messageID'],'before':before,'after':after})
-        controller.dispatch(transport.send)
+        if not staged_input.no_additional(contract):controller.dispatch(transport.send)
         acks=[e for e in controller.events() if e['kind']=='acknowledged']
-        if len(acks)!=1: raise RuntimeError('Additional delivery uncertain; retain and stop without resend')
-        transport.release(barrier['barrier_id'],acks[0]['native_message_id'])
+        if not staged_input.no_additional(contract) and len(acks)!=1:
+            raise RuntimeError('Additional delivery uncertain; retain and stop without resend')
+        if observed:
+            action=controller.resume_action()
+            transport.release(barrier['barrier_id'],action['native_message_id'],resume_action=action)
+        else:transport.release(barrier['barrier_id'],acks[0]['native_message_id'])
     else:
         controller.unchanged_boundary(before,after,barrier)
         ack=next((e for e in controller.events() if e['kind']=='acknowledged'),None)
-        if after_delivery:transport.release(barrier['barrier_id'],ack['native_message_id'])
+        if after_delivery:transport.release(barrier['barrier_id'],ack['native_message_id'] if ack else None)
         else:transport.release(barrier['barrier_id'])
     return after, changed
 
@@ -303,7 +311,8 @@ def execute(root, state, controller, condition, runtime, *, transport=None):
                     controller.stop('operator_stop');return None,'operator_stop'
                 if not controller.remaining():
                     if waiting-handled:controller.unknown_boundary('terminal_or_snapshot_unconfirmed_at_deadline',
-                        phase='after_additional' if delivered else 'before_additional')
+                        phase=('after_resume' if delivered else 'before_resume') if staged_input.observed(controller.contract['boundary_contract'])
+                        else ('after_additional' if delivered else 'before_additional'))
                     return None,'timeout'
                 if (root/'usage/raw/failure.jsonl').exists(): return None,'provider_failure'
                 if not captured:
@@ -325,6 +334,17 @@ def execute(root, state, controller, condition, runtime, *, transport=None):
                 time.sleep(.05)
             return client.returncode,'completed' if client.returncode==0 else 'agent_error'
         finally:
+            if staged_input.observed(controller.contract['boundary_contract']):
+                # Full unpaginated native history, read-only. A stopped/expired
+                # server can make this unavailable; never infer zero sends then.
+                try:
+                    messages=transport.api('worker','/session/'+session+'/message')
+                    util.write_new_json(controller.root/'native-messages.json',messages)
+                    controller._append('native_message_inventory',{'native_session_id':session,
+                        'sha256':util.sha256_file(controller.root/'native-messages.json'),
+                        'client_finished':client.poll() is not None})
+                except Exception as error:
+                    controller._append('native_message_inventory_unavailable',{'error_type':type(error).__name__})
             # Terminate only this owned docker-exec client. The existing runtime
             # shutdown fences/stops both owned containers, including descendants.
             if client.poll() is None:

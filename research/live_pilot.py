@@ -289,9 +289,8 @@ def validate_owned_terminal(root,binding,*,observe_resources=True):
             or implementation.get('raw')!=util.tree_hashes(root/'usage/raw')
             or implementation.get('snapshot_sha256')!=util.sha256_file(root/'snapshot.json')):
         raise ValueError('Implementation originals/snapshot identity changed')
-    native,native_errors=live_usage.journal(root/'evidence/agent.jsonl')
-    native_sessions=sorted({e['sessionID'] for e in native if isinstance(e.get('sessionID'),str)})
-    native_steps=sum(e.get('type')=='step_finish' for e in native)
+    completion=live_usage.native_completion(root,manifest)
+    native_errors=completion['errors'];native_sessions=completion['sessions'];native_steps=completion['steps']
     sessions=provenance.get('native_agent_session_ids',[])
     reached = normalized.get('input_reached') is True
     if manifest.get('staged_input'):
