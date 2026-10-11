@@ -57,6 +57,34 @@ session evidence, usage, input and stopped/absent owned resources before scoring
 Missing evidence or a mismatch blocks scoring; a quality failure cannot trigger
 a new model attempt.
 
+The failure receipt's manifest hash normally must match the current manifest
+exactly. One narrow exception handles a later, successful cleanup confirmation:
+the failed atomic writer's uniquely matching `manifest.json.<uuid>.tmp` must
+contain `submission_fixed=true`. Changing only that field to `false` in memory,
+then serializing with the original key order, `ensure_ascii=False`, `indent=2`,
+UTF-8 and one LF, must reproduce the receipt's original SHA-256 exactly. Both
+the failure receipt and current manifest must still say `submission_fixed=false`.
+This is a verified derivation of the receipt-bound bytes, not a relaxed hash check.
+
+Replacing only that derived manifest's `network_cleanup` must then reproduce the
+current manifest bytes exactly. Within cleanup, only `status`, `started_at`,
+`ended_at` and `duration_seconds` may differ. The transition is strictly
+`removed` to `absent`; both receipts must be confirmed and retain containers,
+with identical Run ID/UUID and network name/ID bound to the stopped runtime.
+Each cleanup must exactly match one retained result file. The old removal also
+requires its corresponding intent and matching owned, unused internal bridge
+snapshot. The later absence confirmation does not require a removal intent.
+Timezone-bound timestamps must place the failure receipt after the old cleanup
+and before the new one. Other changes, ambiguous evidence or an unreproducible
+old hash are rejected before creating the recovery destination.
+
+Only the separate output receives `receipt-manifest-projection.json`, whose hash
+is the old receipt hash. `intent.json.manifest_binding` records its source temp,
+exact derivation recipe, current/failure/cleanup/intent/runtime references and
+the allowed and observed differences. No source manifest, receipt, temp or
+cleanup record is rewritten. The complete source inventory is still checked
+before and after recovery.
+
 The derivative keeps the source Run UUID. Its receipt records zero model calls,
 zero new acquisitions and zero additional acquisition usage. Its normalized
 usage is a reference to the original acquisition, never another row to sum.
