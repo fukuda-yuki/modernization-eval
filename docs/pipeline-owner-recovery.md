@@ -126,7 +126,8 @@ python -B -X utf8 C:\guard-checkout\research\pipeline_retry.py --repo C:\frozen-
 ```
 
 `--reason technical_failure` instead requires existing provider/infrastructure
-classification or a bound original collection-fault receipt. Ordinary low
+classification, a bound original collection-fault receipt, or the explicitly
+adjudicated evaluation-infrastructure evidence described below. Ordinary low
 quality, product/build failure, or an already adopted slot is not retry authority.
 The user-instruction reference identifies authorization that already exists; the
 command does not manufacture approval. It is limited to single-condition attempts
@@ -142,6 +143,86 @@ locked bytes through a second handle. Lock liveness probes likewise use file-siz
 metadata and the OS lock operation. Nested files with the same name remain hashed.
 A repeated identical exclusion is idempotent. Original source changes, duplicate
 selection, partial journals, competing owners or conflicting exclusions are held.
+
+### Explicit evaluation-infrastructure adjudication
+
+For a completed acquisition with an incomplete infrastructure-fault evaluation,
+the same command accepts `--reason technical_failure` with
+`--evaluation-adjudication C:\private\ruling.json`. This optional branch records the operator's already
+authorized ruling. It does not diagnose a database error, invent an approval,
+repair data, run an evaluator, change a score, or dispatch a replacement.
+
+Prepare the private ruling **outside the original Run**, from the retained
+original evidence and an explicit adjudication. Do not edit any acquisition,
+evaluation, manifest or event ledger to make it eligible. Its JSON contract is:
+
+```json
+{
+  "kind": "evaluation_infrastructure_exclusion_adjudication_v1",
+  "run_id": "ORIGINAL_RUN_ID",
+  "run_instance_id": "ORIGINAL_UUID",
+  "authorization_reference": "EXISTING_USER_INSTRUCTION_REFERENCE",
+  "decision": {
+    "classification": "evaluation_infrastructure_fault",
+    "low_level_cause": "unknown",
+    "product_defect": false,
+    "quality_selection": false,
+    "ordinary_timeout": false,
+    "retry_requires_new_uuid": true,
+    "basis": "Existing explicit adjudication and its evidence basis"
+  },
+  "config": {"path": "ABSOLUTE_CONFIG_PATH", "sha256": "ACTUAL_SHA256"},
+  "attempt": {"path": "ABSOLUTE_ATTEMPT_PATH", "sha256": "ACTUAL_SHA256"},
+  "acquisition": {"path": "ABSOLUTE_ACQUISITION_PATH", "sha256": "ACTUAL_SHA256"},
+  "pipeline_evaluation": null,
+  "manifest": {"path": "ABSOLUTE_MANIFEST_PATH", "sha256": "ACTUAL_SHA256"},
+  "snapshot": {"path": "ABSOLUTE_SNAPSHOT_PATH", "sha256": "ACTUAL_SHA256"},
+  "evaluation_index": {"path": "ABSOLUTE_EVALUATION_INDEX_PATH", "sha256": "ACTUAL_SHA256"},
+  "evaluation_record": {"path": "ABSOLUTE_LATEST_RECORD_PATH", "sha256": "ACTUAL_SHA256"},
+  "fault_evidence": [{"path": "ABSOLUTE_ORIGINAL_FAULT_EVIDENCE_PATH", "sha256": "ACTUAL_SHA256"}]
+}
+```
+
+Each reference binds the actual existing file and hash. `authorization_reference`
+must match the CLI argument. The ruling must bind the exact campaign, reservation,
+attempt and UUID, a completed acquisition, the fixed snapshot and the latest
+original scoring record/index. `pipeline_evaluation` must reference the original
+`pipeline-evaluation.json` if present, or be null if absent; later appearance,
+loss or mutation is rejected. Fault evidence must be nonempty, belong to that
+evaluation directory, its sequence's original stdout/stderr logs, or the original
+`pipeline-evaluation.log`. The ruling and evidence remain private and must remain
+available unchanged for future resume validation.
+
+The saved scoring must be an unadopted `evaluator_fault`, exit code 2, explicitly
+not timed out, without mismatches or numeric quality. Output, when produced, must
+be an identity-bound error for the fixed artifact/spec/evaluator. Missing output
+is eligible only when the original record never claimed an output hash. Scored
+results, quality failures, product-prerequisite failures and retained partial
+product failures (including earlier or HTTP-only results) block this branch.
+An ordinary timeout, exception prose or SQLite error number alone never permits
+exclusion. The explicit ruling is required in addition to these checks; its
+`low_level_cause` remains unknown.
+
+Existing recorded evaluation closure must be confirmed: an owned browser-resource
+receipt is checked with the existing saved-cleanup validator; a no-browser-resource
+receipt must bind the Run, artifact/spec and removed evaluator container. Missing
+or ambiguous closure stays held. The command also holds the existing pair lock to
+exclude concurrent evaluation, in addition to the campaign/Run locks and existing
+worker/gateway physical-stop checks.
+
+The same `_exclusions` receipt and `attempt_excluded` event retain the original
+acquisition/evaluation bytes, all costs and missingness, shared reservation count
+and campaign clock. Resume revalidates the ruling and its fixed evidence, skips
+only that attempt, and uses ordinary same-allocation dispatch with a fresh UUID.
+There is no automatic conversion of every evaluation error into retry authority.
+
+Deploy this control-adapter change only after the current initial assignments
+finish and the campaign/evaluator are safely stopped, then use the existing retry
+stage. Do not replace running code or modify frozen protocol/runtime/evaluator
+pins. The initial Windows/cloud acceptance of the base owner adapter does not
+constitute execution-PC acceptance of this additional branch.
+
+### Interrupted preparations
 
 The same `--reason controller_interrupted` command has a preparation-only branch
 for a partial or absent manifest and a Run which never dispatched. Its identity
