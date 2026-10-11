@@ -527,8 +527,11 @@ class PilotWatch:
             try: return runtime.request_stop(root)
             except Exception as exc: return {'run_id':b['run_id'],'stop_confirmed':False,'error_type':type(exc).__name__}
         with ThreadPoolExecutor(max_workers=4) as pool: receipts=list(pool.map(stop,bindings))
-        target=safe_path(self.base/'_control/stop-receipt.json')
+        target=safe_path(self.stop_receipt_path())
         util.write_new_json(target,dict(**self.fault,owned_stops=receipts))
+
+    def stop_receipt_path(self):
+        return self.base/'_control/stop-receipt.json'
 
     def _loop(self):
         while not self.done.wait(1):

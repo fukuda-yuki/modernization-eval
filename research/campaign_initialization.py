@@ -129,6 +129,9 @@ def validate(plan, repo):
     monitor = live_pilot.checked(plan['resource_monitor'])
     if live_pilot.checked(plan['resource_probe']) != monitor.with_name('wave_resource_probe.py'):
         raise ValueError('Foreign resource probe')
+    from research.resource_supervisor import load_monitor
+    load_monitor(dict(resource_monitor=plan['resource_monitor'], resource_probe=plan['resource_probe'],
+                      cases_per_assignment=width))
     live_pilot.checked(plan['browser_pin'])
     return root
 
