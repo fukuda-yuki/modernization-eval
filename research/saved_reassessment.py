@@ -68,7 +68,8 @@ def prepare(*, source, destination, evaluator_bundle, assembly, spec,
             observation_plan = reference(Path(observation_plan).resolve())
         observation = observation_revision.selected_source(Path(__file__).resolve().parents[1], observation_plan, source)
         plan, selected, family, entry = observation
-        observation_revision.validate_destination(Path(__file__).resolve().parents[1], plan, destination)
+        observation_revision.validate_destination(Path(__file__).resolve().parents[1], plan, destination,
+                                                   plan_ref=observation_plan)
         if (bundle != Path(entry['bundle']).resolve() or assembly != family['assembly']
                 or repair_contract != observation_revision.REVISION
                 or evaluation_version != family['version']
@@ -355,6 +356,15 @@ def revalidate(stage, destination, *, repo=None):
     if (_inside(stage, source) or _inside(source, stage)
             or _inside(destination, source) or _inside(destination, stage)):
         raise ValueError('Validation receipt must remain outside source and assessment roots')
+    # This is outside the receipt-producing try/finally: even invalid evidence
+    # must never write a failure receipt into another selected Run or its inputs.
+    if 'observation_plan' in assessment:
+        from research import observation_revision, live_pilot
+        plan = util.read_json(live_pilot.checked(assessment['observation_plan']))
+        observation_revision.validate_destination(repo, plan, destination,
+                                                   plan_ref=assessment['observation_plan'])
+    elif assessment.get('observation_revision'):
+        raise ValueError('Observation validation requires its selected plan before any receipt')
     if destination.exists(): raise FileExistsError(destination)
     receipt = {'schema_version':1, 'kind':'saved_assessment_read_only_validation',
         'validation_id':uuid.uuid4().hex, 'assessment_id':assessment['assessment_id'],

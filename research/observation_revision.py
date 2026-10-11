@@ -6,6 +6,7 @@ index writer is reachable here; saved_reassessment owns execution/validation.
 """
 import argparse
 import json
+import math
 from pathlib import Path
 import re
 
@@ -75,7 +76,7 @@ def selected_source(repo, plan_ref, source):
     rows = plan['selected_runs']
     required = {'source', 'run_id', 'run_instance_id', 'manifest_sha256', 'condition_sha256',
                 'artifact_sha256', 'evaluation', 'evaluation_id'}
-    if any(set(row) not in (required, required | {'restoration'}) for row in rows):
+    if any(not required <= set(row) or set(row) - required - {'restoration', 'prior_assessment'} for row in rows):
         raise ValueError('Exact selected original Run/evaluation bindings required')
     ids = [row['run_instance_id'] for row in rows]
     paths = [live_pilot.safe_path(row['source']) for row in rows]
@@ -103,16 +104,23 @@ def selected_source(repo, plan_ref, source):
             or util.artifact_hash(source/'frozen') != row['artifact_sha256']):
         raise ValueError('Selected original identity/artifact changed')
     evaluation = live_pilot.checked(row['evaluation'])
-    if not evaluation.is_relative_to(source/'evaluations'):
-        raise ValueError('Selected old evaluation must belong to its original Run')
     old = util.read_json(evaluation)
-    if not isinstance(row['evaluation_id'], str) or not row['evaluation_id'] or old.get('evaluationId') != row['evaluation_id']:
+    if old.get('evaluationId') != row['evaluation_id']:
         raise ValueError('Selected old evaluation ID changed')
-    records = util.read_lines(source/'evaluations/index.jsonl')
-    if not any(record.get('evaluation_sha256') == row['evaluation']['sha256']
-               and (source/record.get('directory', '')/'evaluation.json').resolve() == evaluation
-               for record in records):
-        raise ValueError('Selected evaluation hash is not bound by the original index')
+    if 'prior_assessment' in row:
+        if row['evaluation_id'] is not None and (not isinstance(row['evaluation_id'], str) or not row['evaluation_id']):
+            raise ValueError('Prior evaluation ID must be its recorded string or null')
+        verify_prior_assessment(source, row, old)
+    else:
+        if not evaluation.is_relative_to(source/'evaluations'):
+            raise ValueError('Selected old evaluation requires its original Run or explicit prior assessment')
+        if not isinstance(row['evaluation_id'], str) or not row['evaluation_id']:
+            raise ValueError('Original Run evaluation requires its recorded evaluation ID')
+        records = util.read_lines(source/'evaluations/index.jsonl')
+        if not any(record.get('evaluation_sha256') == row['evaluation']['sha256']
+                   and (source/record.get('directory', '')/'evaluation.json').resolve() == evaluation
+                   for record in records):
+            raise ValueError('Selected evaluation hash is not bound by the original index')
     family, entry, files, sources = family_binding(repo, plan['revision'], family_for_task(condition['task_id']))
     if (condition['evaluation']['evaluation_version'] != family['version']
             or condition['evaluation']['spec_sha256'] != entry['spec_sha256_by_task'][condition['task_id']]):
@@ -123,6 +131,95 @@ def selected_source(repo, plan_ref, source):
     browser = util.read_json(live_pilot.checked(plan['browser_pin']))
     catalog_environment.validate(browser, repo)
     return plan, row, family, entry
+
+
+def verify_prior_assessment(source, row, output):
+    """Bind a separately adopted saved assessment without copying into the Run.
+
+    The adoption input is the existing processed adopted-evaluations table.
+    Paths recorded on the old execution host are provenance, not relocation
+    instructions. Original identity is joined through immutable bytes instead.
+    """
+    from research.saved_reassessment import byte_inventory
+    binding = row['prior_assessment']
+    if set(binding) != {'assessment', 'result', 'adoption'}:
+        raise ValueError('Prior assessment requires pinned assessment, result and adoption evidence')
+    paths = {key: live_pilot.checked(ref) for key, ref in binding.items()}
+    a, result = (util.read_json(paths[key]) for key in ('assessment', 'result'))
+    stage = paths['assessment'].parent
+    evaluation = live_pilot.checked(row['evaluation'])
+    if (paths['assessment'].name != 'assessment.json' or paths['result'].name != 'result.json'
+            or evaluation != stage/'output/evaluation.json'
+            or stage.is_relative_to(source) or source.is_relative_to(stage)):
+        raise ValueError('Prior assessment must remain separate with its own output')
+    kind = a.get('kind')
+    if kind not in ('saved_artifact_reassessment', 'campaign_same_version_reassessment_v1'):
+        raise ValueError('Unsupported prior saved assessment contract')
+    expected_result = stage/'result.json' if kind == 'saved_artifact_reassessment' else stage.parent/'result.json'
+    if paths['result'] != expected_result:
+        raise ValueError('Prior result does not belong to its assessment')
+    identity = a.get('assessment_id', '')
+    if (not re.fullmatch('[0-9a-f]{32}', identity) or identity == row['run_instance_id']
+            or a.get('source_run_instance_id') != row['run_instance_id']
+            or a.get('source_run_id') != row['run_id']
+            or a.get('source_artifact_sha256') != row['artifact_sha256']
+            or a.get('source_condition_sha256') != row['condition_sha256']
+            or a.get('acquisition_count_increment') != 0
+            or result.get('assessment_id') != identity or result.get('adopted') is not True
+            or result.get('source_unchanged') is not True
+            or output.get('reviewRunInstanceId') != identity):
+        raise ValueError('Prior assessment/result identity or adoption differs from original Run')
+    condition = util.read_json(source/'condition.json')
+    spec_hash = util.sha256_file(source/'evaluation-assets/requirements.json')
+    if (a.get('source_spec_sha256') != spec_hash or a.get('new_spec_sha256') != spec_hash
+            or a.get('source_evaluation_version') != condition['evaluation']['evaluation_version']
+            or a.get('evaluation_version') != condition['evaluation']['evaluation_version']):
+        raise ValueError('Prior assessment must use the selected original exact spec')
+    inventory = a.get('source_byte_inventory', {})
+    actual = byte_inventory(source)
+    # Bind UUID in the actual manifest, acquisition condition, fixed snapshot,
+    # spec and every artifact member. Do not rewrite old host paths/manifests.
+    names = {'manifest.json', 'condition.json', 'snapshot.json', 'evaluation-assets/requirements.json'}
+    if (any(inventory.get(name) != actual.get(name) or name not in actual for name in names)
+            or {n: h for n, h in inventory.items() if n.startswith('frozen/')} !=
+               {n: h for n, h in actual.items() if n.startswith('frozen/')}):
+        raise ValueError('Prior assessment original source bytes differ')
+    quality = output.get('quality')
+    if (type(quality) not in (int, float) or not math.isfinite(quality) or not 0 <= quality <= 100
+            or result.get('quality') != quality):
+        raise ValueError('Prior adopted quality is not bound to its output')
+    if kind == 'saved_artifact_reassessment':
+        if (result.get('raw_result') != 'output/evaluation.json'
+                or result.get('operation_status') != 'evaluation_finished'
+                or result.get('cleanup_confirmed') is not True or result.get('errors') != []):
+            raise ValueError('Prior saved result is not an adopted completed assessment')
+    else:
+        if (any(result.get(key) != a.get(key) for key in ('source_run_id', 'source_run_instance_id'))
+                or result.get('kind') != kind or result.get('model_calls') != 0
+                or result.get('acquisition_count_increment') != 0
+                or result.get('quality_observed_complete') is not True
+                or result.get('classification') != 'already_evaluable'
+                or result.get('assessment', {}).get('sha256') != binding['assessment']['sha256']
+                or result.get('derivative_after_inventory', {}).get('observation/assessment.json') != binding['assessment']['sha256']
+                or result.get('derivative_after_inventory', {}).get('observation/output/evaluation.json') != row['evaluation']['sha256']
+                or any(result.get(key) is not None for key in
+                       ('error_type', 'invariant_error_type', 'archive_error_type'))):
+            raise ValueError('Prior campaign result is not an adopted completed assessment')
+    adoption = util.read_json(paths['adoption'])
+    if not isinstance(adoption, list):
+        raise ValueError('Existing adopted-evaluations table required')
+    matches = [entry for entry in adoption if entry.get('run_instance_id') == row['run_instance_id']]
+    if len(matches) != 1:
+        raise ValueError('Prior adopted evaluation must have one original Run entry')
+    adopted = matches[0]
+    if (adopted.get('assessment_id') != identity or adopted.get('artifact_sha256') != row['artifact_sha256']
+            or adopted.get('condition_sha256') != row['condition_sha256']
+            or adopted.get('evaluator_version') != a['evaluation_version']
+            or adopted.get('evaluation_original_sha256') != row['evaluation']['sha256']
+            or adopted.get('evaluation_member_sha256') != row['evaluation']['sha256']
+            or adopted.get('source_reference_matches_original_sha256') is not True
+            or adopted.get('quality') != quality):
+        raise ValueError('Prior adopted evaluation table differs from bound saved evidence')
 
 
 def verify_restoration(source, selected):
@@ -171,12 +268,33 @@ def validate_assessment(repo, stage, assessment):
     return plan
 
 
-def validate_destination(repo, plan, destination):
+def validate_destination(repo, plan, destination, *, plan_ref=None):
+    """Fence every writer, including failed validation receipts, before writes.
+
+    Use the complete pinned selection, not just the Run currently being read.
+    Input reference files are protected even when stored outside those trees.
+    """
+    destination = live_pilot.safe_path(destination)
     revision = util.read_json(live_pilot.checked(plan['revision']))
     protected = [Path(repo).resolve(), *[live_pilot.safe_path(row['source']) for row in plan['selected_runs']],
                  *[live_pilot.safe_path(entry['bundle']) for entry in revision['families'].values()]]
+    references = [plan['revision'], plan['browser_pin']]
+    if plan_ref is not None:
+        references.append(plan_ref)
+    references += [entry['build_receipt'] for entry in revision['families'].values()]
+    for row in plan['selected_runs']:
+        protected.append(live_pilot.safe_path(row['evaluation']['path']).parent)
+        if 'prior_assessment' in row:
+            prior = row['prior_assessment']
+            protected += [live_pilot.safe_path(prior[key]['path']).parent
+                          for key in ('assessment', 'result', 'adoption')]
+        if 'restoration' in row:
+            references.append(row['restoration'])
+            restoration = util.read_json(live_pilot.checked(row['restoration']))
+            protected.append(live_pilot.safe_path(restoration['archive']))
+    protected += [live_pilot.safe_path(ref['path']) for ref in references]
     if any(destination.is_relative_to(path) or path.is_relative_to(destination) for path in protected):
-        raise ValueError('Observation output overlaps source, repository or accepted bundle')
+        raise ValueError('Observation output overlaps protected source, repository, bundle or evidence')
 
 
 def prepare_selected(repo, plan_ref, destination):
@@ -189,7 +307,7 @@ def prepare_selected(repo, plan_ref, destination):
     if not isinstance(plan.get('selected_runs'), list) or not plan['selected_runs']:
         raise ValueError('Explicit nonempty fixed selection required')
     bindings = [selected_source(repo, plan_ref, Path(row['source'])) for row in plan['selected_runs']]
-    validate_destination(repo, plan, destination)
+    validate_destination(repo, plan, destination, plan_ref=plan_ref)
     destination.mkdir(parents=True, exist_ok=False)
     stages = []
     for _, row, family, entry in bindings:

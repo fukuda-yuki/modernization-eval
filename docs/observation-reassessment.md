@@ -101,8 +101,34 @@ private selection planは次の4フィールドを持つ。
 既存の3固定JSON等から選択台帳を生成する作業は研究管理側で行う。
 このコードは対象数や対象者を推測せず、渡された全件を固定する。
 今回のselected200は全200行を列挙する。品質、旧pass/fail、recoverable判定で
-絞らない。UUID重複、対象外source、旧indexと一致しない評価hashは拒否する。
+絞らない。UUID重複、対象外source、元Run内評価で旧indexと一致しないhashは拒否する。
 同じ`evaluationId`は許容し、元UUID・旧評価hash・新`assessment_id`で区別する。
+
+別保存の再評価が既に採用されていた行では、`evaluation`をその原本の
+`output/evaluation.json`へ向け、次の`prior_assessment`を追加する。
+`adoption`は研究管理側の既存`processed/adopted-evaluations.json`全体への
+path/hash参照とする。採用主張をこの操作で新規に作成しない。
+
+```json
+{
+  "prior_assessment": {
+    "assessment": {"path": "/private/old-assessment/observation/assessment.json", "sha256": "OLD_ASSESSMENT_HASH"},
+    "result": {"path": "/private/old-assessment/result.json", "sha256": "OLD_RESULT_HASH"},
+    "adoption": {"path": "/private/processed/adopted-evaluations.json", "sha256": "ADOPTION_TABLE_HASH"}
+  }
+}
+```
+
+既存`campaign_same_version_reassessment_v1`ではresultはobservationの親にあり、
+`saved_artifact_reassessment`ではassessmentと同じdirectoryにある。
+両方とも旧assessment/result/採用行のUUID・artifact・condition・spec・評価hashを
+元Runの実bytesへ照合する。旧assessmentのsource inventoryはmanifest、condition、
+snapshot、spec、全frozen memberと照合し、記録された旧ホストpathは書き換えない。
+campaign resultのassessment参照と保存inventoryにも旧assessment・評価hashを照合する。
+旧IDが欠落/nullなら、この別保存経路だけ`evaluation_id: null`をそのまま記録する。
+IDを捏造せず、原Runへ評価をコピーせず、原indexにも追記しない。
+証跡欠落・改変・別UUID・採用行重複は拒否する。旧評価の採用来歴の結合であり、
+旧browser操作の再実行や旧判定の再採点ではない。
 
 ```bash
 python -m research.observation_revision /private/selected.json /private/new-assessments --repo /checkout
@@ -117,12 +143,16 @@ executeは同じplan/build/spec/sourceを再照合し、evaluator imageとSDKを
 固定browser環境で既存の隔離HTTP→browser採点を使う。評価は直列に呼ぶ。
 1800秒を超える評価timeoutは拒否する。中断済みoutput/probeを上書きしない。
 
-revalidateは新しい検証receiptだけを書く。原Runのmanifest・snapshot・index・
+revalidateは新しい検証receiptだけを書く。書込み前に全選択Run、共通bundle、repo、
+原評価directory、旧assessment/result、採用台帳などの入力参照との重なりを検査する。
+不正な出力先は例外で停止し、失敗receiptもその場所には書かない。変更されたplanから
+保護範囲を推測せず、hash照合失敗時はreceipt生成前に停止する。
+原Runのmanifest・snapshot・index・
 原評価・DBを更新しない。観測不足やfaultのqualityはnullを保ち、旧passから
 新passを補完しない。結果の採用は既存のidentity・browser coverage・cleanup等の
 検査を通った場合に限る。再評価の使用量を新しいモデルRunの使用量へ加算しない。
 
-## 4. 派生復元物の追加証明
+## 4. 原本bytesの完全一致復元の追加証明
 
 原本sourceには通常の`profiles.validate_run`を使う。復元sourceも同じ検証を
 通した上で、selection行の任意の`restoration` path/hash参照を追加する。
@@ -137,3 +167,4 @@ package本体・index・参照package、保存member、復元bytes/size、原man
 
 不足member、差分、原manifestとの不一致はholdとなる。復元都合のmanifest再生成、
 spec/version変更、hash検査の省略、無証明のZIP展開を原本扱いする機能はない。
+派生ZIPやDERIVATIONSで変更されたbytesを原本へ対応付ける互換処理は提供しない。

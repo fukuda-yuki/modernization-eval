@@ -92,6 +92,41 @@ class ObservationRevisionTests(unittest.TestCase):
         util.write_json_atomic(self.plan_path, self.plan)
         self.plan_ref = live_pilot.reference(self.plan_path)
 
+    def separate_prior(self, source, *, kind='campaign_same_version_reassessment_v1', eid=None):
+        """Artificial historical files with the existing producer/table schemas."""
+        row=self.selection(source);condition=util.read_json(source/'condition.json')
+        identity=f'{int(row["run_instance_id"],16) ^ (1 << 127):032x}'
+        holder=self.root/'prior-assessments'/row['run_instance_id']
+        stage=holder/'observation' if kind=='campaign_same_version_reassessment_v1' else holder
+        a=dict(kind=kind,assessment_id=identity,source_run_id=row['run_id'],
+            source_run_instance_id=row['run_instance_id'],source_path_private='/old-host/original',
+            source_artifact_sha256=row['artifact_sha256'],source_condition_sha256=row['condition_sha256'],
+            source_spec_sha256=condition['evaluation']['spec_sha256'],
+            new_spec_sha256=condition['evaluation']['spec_sha256'],
+            source_evaluation_version=condition['evaluation']['evaluation_version'],
+            evaluation_version=condition['evaluation']['evaluation_version'],acquisition_count_increment=0,
+            source_byte_inventory=saved.byte_inventory(source))
+        util.write_new_json(stage/'assessment.json',a)
+        output=self.output(source,eid,complete=True);output['reviewRunInstanceId']=identity
+        util.write_new_json(stage/'output/evaluation.json',output)
+        result=dict(assessment_id=identity,source_run_id=row['run_id'],source_run_instance_id=row['run_instance_id'],
+            adopted=True,source_unchanged=True,quality=100,kind=kind,model_calls=0,acquisition_count_increment=0,
+            quality_observed_complete=True,classification='already_evaluable',
+            assessment=live_pilot.reference(stage/'assessment.json'),
+            derivative_after_inventory={'observation/'+n:h for n,h in saved.byte_inventory(stage).items()},
+            raw_result='output/evaluation.json',operation_status='evaluation_finished',cleanup_confirmed=True,errors=[])
+        util.write_new_json(holder/'result.json',result)
+        row.update(evaluation=live_pilot.reference(stage/'output/evaluation.json'),evaluation_id=eid)
+        adoption=[dict(run_instance_id=row['run_instance_id'],assessment_id=identity,
+            artifact_sha256=row['artifact_sha256'],condition_sha256=row['condition_sha256'],
+            evaluator_version=a['evaluation_version'],evaluation_original_sha256=row['evaluation']['sha256'],
+            evaluation_member_sha256=row['evaluation']['sha256'],source_reference_matches_original_sha256=True,
+            evaluation_member='reassessments/'+row['run_instance_id']+'/output/evaluation.json',quality=100)]
+        util.write_new_json(holder/'adopted-evaluations.json',adoption)
+        row['prior_assessment']={key:live_pilot.reference(path) for key,path in dict(
+            assessment=stage/'assessment.json',result=holder/'result.json',adoption=holder/'adopted-evaluations.json').items()}
+        return row
+
     def prepare(self, **changes):
         entry = util.read_json(self.revision_path)['families']['education']
         args = dict(source=self.source, destination=self.root/'assessments',
@@ -170,6 +205,89 @@ class ObservationRevisionTests(unittest.TestCase):
         self.assertEqual(len({r['source_evaluation_id'] for r in records}),1)
         with self.assertRaises(FileExistsError):revision.prepare_selected(REPO,self.plan_ref,self.root/'selected')
 
+    def test_separately_adopted_prior_result_prepare_execute_revalidate(self):
+        row=self.separate_prior(self.source)
+        self.plan['selected_runs']=[row];self.save_plan()
+        prior_root=Path(row['prior_assessment']['result']['path']).parent
+        before=saved.byte_inventory(prior_root)
+        stage=self.prepare();result,validation=self.execute(stage,complete=True)
+        self.assertTrue(result['adopted'],result);self.assertTrue(validation['adopted'],validation)
+        self.assertIsNone(util.read_json(stage/'assessment.json')['source_evaluation_id'])
+        self.assertEqual(saved.byte_inventory(self.source),self.before)
+        self.assertEqual(saved.byte_inventory(prior_root),before)
+
+    def test_saved_adapter_prior_result_with_recorded_evaluation_id(self):
+        row=self.separate_prior(self.source,kind='saved_artifact_reassessment',eid='historical-id')
+        self.plan['selected_runs']=[row];self.save_plan()
+        self.assertTrue(self.prepare().is_dir())
+
+    def test_external_copy_without_prior_adoption_cannot_replace_original_index(self):
+        path=self.root/'unbound/output/evaluation.json'
+        path.parent.mkdir(parents=True);shutil.copyfile(self.source/'evaluations/old/evaluation.json',path)
+        self.plan['selected_runs'][0]['evaluation']=live_pilot.reference(path);self.save_plan()
+        with self.assertRaisesRegex(ValueError,'explicit prior assessment'):self.prepare()
+        self.assertEqual(saved.byte_inventory(self.source),self.before)
+        self.assertFalse((self.root/'assessments').exists())
+
+    def test_prior_missing_altered_or_foreign_evidence_is_rejected(self):
+        row=self.separate_prior(self.source);self.plan['selected_runs']=[row]
+        original=copy.deepcopy(row)
+        a_path=Path(row['prior_assessment']['assessment']['path'])
+        result_path=Path(row['prior_assessment']['result']['path'])
+        adoption_path=Path(row['prior_assessment']['adoption']['path'])
+        originals={path:path.read_bytes() for path in (a_path,result_path,adoption_path)}
+        mutations=[('assessment','source_run_instance_id','f'*32),
+                   ('assessment','source_artifact_sha256','0'*64),
+                   ('assessment','source_condition_sha256','0'*64),
+                   ('assessment','source_spec_sha256','0'*64),
+                   ('assessment','new_spec_sha256','0'*64),
+                   ('assessment','source_byte_inventory',{}),
+                   ('result','adopted',False),('result','assessment_id','f'*32),
+                   ('result','derivative_after_inventory',{}),('result','quality',99),
+                   ('adoption','assessment_id','f'*32),('adoption','evaluation_original_sha256','0'*64),
+                   ('adoption','condition_sha256','0'*64),('adoption','evaluation_member_sha256','0'*64)]
+        for name,key,value in mutations:
+            with self.subTest(name=name,key=key):
+                row=copy.deepcopy(original);self.plan['selected_runs']=[row]
+                for path,data in originals.items():path.write_bytes(data)
+                path=Path(row['prior_assessment'][name]['path']);data=util.read_json(path)
+                (data[0] if name=='adoption' else data)[key]=value
+                util.write_json_atomic(path,data)
+                # Even explicitly repinning a foreign claim cannot bypass joins.
+                row['prior_assessment'][name]=live_pilot.reference(path);self.save_plan()
+                with self.assertRaises(ValueError):self.prepare()
+        for path,data in originals.items():path.write_bytes(data)
+        self.plan['selected_runs']=[copy.deepcopy(original)];self.save_plan()
+        a_path.write_bytes(originals[a_path]+b'\n')
+        with self.assertRaisesRegex(ValueError,'reference changed'):self.prepare()
+        a_path.unlink()
+        with self.assertRaises(FileNotFoundError):self.prepare()
+        self.assertFalse((self.root/'assessments').exists())
+        self.assertEqual(saved.byte_inventory(self.source),self.before)
+
+    def test_prior_adoption_requires_unique_run_and_original_evaluation_id_gate_remains(self):
+        row=self.separate_prior(self.source);self.plan['selected_runs']=[row]
+        path=Path(row['prior_assessment']['adoption']['path']);data=util.read_json(path)
+        util.write_json_atomic(path,data+data)
+        row['prior_assessment']['adoption']=live_pilot.reference(path);self.save_plan()
+        with self.assertRaisesRegex(ValueError,'one original Run'):self.prepare()
+        self.plan['selected_runs']=[self.selection(self.source)]
+        self.plan['selected_runs'][0]['evaluation_id']=None;self.save_plan()
+        with self.assertRaisesRegex(ValueError,'evaluation ID'):self.prepare()
+
+    def test_prior_evidence_is_checked_again_before_execution_and_revalidation(self):
+        row=self.separate_prior(self.source);self.plan['selected_runs']=[row];self.save_plan()
+        stage=self.prepare();self.execute(stage,complete=True)
+        path=Path(row['prior_assessment']['result']['path'])
+        path.write_bytes(path.read_bytes()+b'\n')
+        with patch.object(saved.evaluate,'run_evaluator') as runner:
+            with self.assertRaisesRegex(ValueError,'reference changed'):saved.execute(stage,repo=REPO)
+        runner.assert_not_called()
+        receipt=saved.revalidate(stage,self.root/'changed-prior-validation.json',repo=REPO)
+        self.assertEqual(receipt['validation_status'],'invalid_evidence')
+        self.assertFalse(receipt['adopted']);self.assertIsNone(receipt['quality'])
+        self.assertEqual(saved.byte_inventory(self.source),self.before)
+
     def test_outside_selection_or_duplicate_uuid_refused(self):
         other=self.root/'foreign';shutil.copytree(self.source,other)
         with self.assertRaisesRegex(ValueError,'outside'):self.prepare(source=other)
@@ -246,7 +364,7 @@ class ObservationRevisionTests(unittest.TestCase):
             (source/'evaluations/index.jsonl').unlink()
             util.append_line(source/'evaluations/index.jsonl',{'directory':'evaluations/old',
                 'evaluation_sha256':util.sha256_file(path),'verdict':output['verdict']})
-            self.plan['selected_runs'].append(self.selection(source))
+            self.plan['selected_runs'].append(self.separate_prior(source) if number in (150,175) else self.selection(source))
         self.save_plan()
         result=revision.prepare_selected(REPO,self.plan_ref,self.root/'prepared-200')
         self.assertEqual(len(result['stages']),200)
@@ -256,6 +374,7 @@ class ObservationRevisionTests(unittest.TestCase):
         self.assertEqual({r['source_evaluation']['sha256'] for r in records},
                          {r['evaluation']['sha256'] for r in self.plan['selected_runs']})
         self.assertFalse(result['executed'])
+        self.assertEqual(sum('prior_assessment' in r for r in self.plan['selected_runs']),2)
 
     def test_wrong_sdk_and_missing_plan_do_not_launch_evaluator(self):
         stage=self.prepare()
@@ -279,6 +398,57 @@ class ObservationRevisionTests(unittest.TestCase):
                 self.prepare(destination=destination)
             self.assertFalse(destination.exists())
         self.assertEqual(saved.byte_inventory(other),before)
+
+    def test_revalidation_receipts_protect_entire_selection_even_when_invalid(self):
+        other=self.root/'other';shutil.copytree(self.source,other)
+        manifest=util.read_json(other/'manifest.json');manifest['run_instance_id']='b'*32
+        util.write_json_atomic(other/'manifest.json',manifest)
+        self.plan['selected_runs'].append(self.selection(other));self.save_plan()
+        stage=self.prepare()
+        # No result exists, so ordinary revalidation would produce invalid_evidence.
+        # Neither that receipt nor even a new parent directory may touch inputs.
+        roots=(self.source,other,self.root/'music',self.root/'education',stage)
+        before={root:saved.byte_inventory(root) for root in roots}
+        for destination in (other/'new/receipt.json',self.root/'education/new/receipt.json',
+                            self.root/'music/new/receipt.json',REPO/'new-observation-receipt.json',
+                            self.plan_path,self.revision_path,self.browser):
+            with self.subTest(destination=destination),self.assertRaisesRegex(ValueError,'overlaps'):
+                saved.revalidate(stage,destination,repo=REPO)
+        self.assertEqual({root:saved.byte_inventory(root) for root in roots},before)
+        self.assertFalse((REPO/'new-observation-receipt.json').exists())
+        receipt=saved.revalidate(stage,self.root/'safe-validation.json',repo=REPO)
+        self.assertFalse(receipt['adopted'])
+        self.assertEqual(receipt['validation_status'],'invalid_evidence')
+
+    def test_revalidation_cannot_drop_plan_or_use_changed_plan_to_write_failure(self):
+        stage=self.prepare()
+        self.plan['selected_runs'].append(copy.deepcopy(self.plan['selected_runs'][0]))
+        util.write_json_atomic(self.plan_path,self.plan)
+        target=self.root/'unsafe-failure.json'
+        with self.assertRaisesRegex(ValueError,'reference changed'):
+            saved.revalidate(stage,target,repo=REPO)
+        a=util.read_json(stage/'assessment.json');a.pop('observation_plan')
+        util.write_json_atomic(stage/'assessment.json',a)
+        with self.assertRaisesRegex(ValueError,'selected plan'):
+            saved.revalidate(stage,target,repo=REPO)
+        self.assertFalse(target.exists())
+
+    def test_revalidation_protects_separate_old_assessment_and_adoption_evidence(self):
+        row=self.separate_prior(self.source)
+        adoption=self.root/'historical-processed/adopted-evaluations.json';adoption.parent.mkdir()
+        shutil.copyfile(row['prior_assessment']['adoption']['path'],adoption)
+        row['prior_assessment']['adoption']=live_pilot.reference(adoption)
+        self.plan['selected_runs']=[row];self.save_plan()
+        stage=self.prepare()
+        prior_root=Path(row['prior_assessment']['result']['path']).parent
+        before=saved.byte_inventory(prior_root)
+        for target in (prior_root/'new/receipt.json',Path(row['evaluation']['path']).parent/'receipt.json',
+                       adoption,adoption.parent/'new-receipt.json'):
+            with self.subTest(target=target),self.assertRaisesRegex(ValueError,'overlaps'):
+                saved.revalidate(stage,target,repo=REPO)
+        self.assertEqual(saved.byte_inventory(prior_root),before)
+        self.assertEqual(saved.byte_inventory(self.source),self.before)
+        self.assertEqual(list(adoption.parent.iterdir()),[adoption])
 
 
 if __name__ == '__main__':unittest.main()
