@@ -20,6 +20,9 @@ class CampaignTests(unittest.TestCase):
         for name in ('monitor.py', 'wave_resource_probe.py', 'browser.json', 'lock.json'):
             util.write_new_json(self.root/name, {})
             refs[name] = live_pilot.reference(self.root/name)
+        (self.root/'monitor.py').write_text('CADENCE_SECONDS=10\nSTALE_SECONDS=30\n'
+            'class ResourceMonitor:\n    SUPPORTED_RUN_COUNTS=(0,1,2,4,8)\n', encoding='utf-8')
+        refs['monitor.py'] = live_pilot.reference(self.root/'monitor.py')
         self.plan = dict(kind=fresh.KIND, campaign_id='synthetic-a', output_root=str(self.root/'a'),
             pair_count=1, pair_concurrency=1, task_revision='evaluators-20261006',
             assignments=[dict(pair=1, cases=[dict(task='MS1-CONT-A', condition=arm, pair=1, slot=i,
@@ -135,7 +138,7 @@ class CampaignTests(unittest.TestCase):
         def epoch(repo, config, number):
             with patch.object(live_pilot, 'reference', wraps=live_pilot.reference) as ref:
                 actual = ref._mock_wraps
-                ref.side_effect = lambda p: actual(self.root/'lock.json' if str(p).endswith('/runtime/'+self.root.name+'/lock.json') else p)
+                ref.side_effect = lambda p: actual(self.root/'lock.json' if Path(p).as_posix().endswith('/runtime/'+self.root.name+'/lock.json') else p)
                 return original(repo, config, number)
         self.patch(pipeline, 'create_epoch', side_effect=epoch)
 
