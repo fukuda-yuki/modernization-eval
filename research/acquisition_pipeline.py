@@ -384,7 +384,7 @@ def pending_acquisition_slots(config, attempts, accepted):
     return pending, held
 
 
-def run_pipeline(repo, config_path):
+def run_pipeline(repo, config_path, *, attempt_policy=None):
     config = util.read_json(config_path)
     if 'campaign_plan' in config:
         from research.campaign_initialization import verify_config
@@ -417,6 +417,7 @@ def run_pipeline(repo, config_path):
             # Resume saved completed acquisitions before considering fresh UUIDs.
             for attempt in attempts:
                 if attempt['slot'] in accepted: continue
+                if attempt_policy is not None and attempt_policy.excluded(attempt): continue
                 path = Path(attempt['record'])
                 if (path.parent/'pipeline-evaluation.json').exists():
                     result = util.read_json(path.parent/'pipeline-evaluation.json')
@@ -428,7 +429,7 @@ def run_pipeline(repo, config_path):
         budget = Budget(config)
         for a in attempts:
             saved = util.read_json(Path(a['record']).parent/'pipeline-acquisition.json')
-            budget.finish(a['record'], saved['usage'])
+            budget.finish(a['record'], attempt_policy.usage(a,saved) if attempt_policy is not None else saved['usage'])
         reserved_count = config['reserved_pair_attempts'] + len(attempts)
         event('started', pid=os.getpid(), accepted=sorted(accepted))
         complete = threading.Event()
@@ -448,6 +449,7 @@ def run_pipeline(repo, config_path):
             for a in attempts:
                 batch = Path(a['record']).parent
                 if a['slot'] in accepted: continue
+                if attempt_policy is not None and attempt_policy.excluded(a): continue
                 saved = util.read_json(batch/'pipeline-acquisition.json')
                 if saved['acquired']:
                     result = evaluation_process(repo, a['record'])
@@ -457,7 +459,10 @@ def run_pipeline(repo, config_path):
                 budget.check(None,{})
                 number = 1 + len(list((root/'epochs').glob('*/plan.json')))
                 epoch = create_epoch(repo, config, number); plan = util.read_json(epoch)
-                pending, held = pending_acquisition_slots(config, attempts, accepted)
+                eligible_history=[a for a in attempts if attempt_policy is None or not attempt_policy.excluded(a)]
+                pending, held = pending_acquisition_slots(config, eligible_history, accepted)
+                historical_slots=set(config['attempted_slots'])|{a['slot'] for a in attempts}
+                pending.sort(key=lambda n:(n in historical_slots,n))
                 if held: event('saved_evaluation_held', slots=sorted(held), model_resend=False)
                 if not pending: raise RuntimeError('Saved evaluation recovery required; no model resend')
                 historical = set(config['attempted_slots']) | {a['slot'] for a in attempts}
@@ -524,7 +529,8 @@ def run_pipeline(repo, config_path):
                 dispatch_pipeline(pending, acquire, score, acquired, evaluated,
                     capacity=config['policy']['active_model_pairs'])
                 # Persistent evaluation faults require saved-result repair, not a new model attempt.
-                if any(a['slot'] not in accepted and util.read_json(Path(a['record']).parent/'pipeline-acquisition.json')['acquired']
+                if any(a['slot'] not in accepted and (attempt_policy is None or not attempt_policy.excluded(a))
+                       and util.read_json(Path(a['record']).parent/'pipeline-acquisition.json')['acquired']
                        for a in attempts):
                     raise RuntimeError('Saved evaluation recovery required; no model resend')
             event('complete', accepted=sorted(accepted), usage=budget.total)
