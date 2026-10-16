@@ -4,7 +4,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import os
 from pathlib import Path, PurePosixPath
 import re
 import shutil
@@ -204,6 +203,7 @@ def evidence_ledger(source, features, evidence):
         start, end = item['lines']
         excerpt = '\n'.join(lines[start - 1:end])
         require(0 < start <= end <= len(lines), 'Evidence line range invalid')
+        require(sha((source / path).read_bytes()) == item['source_sha256'], 'Evidence file changed')
         require(item['anchor'] in excerpt, f'Evidence anchor absent: {item["id"]}')
         by_path.setdefault(path, []).append(item['id'])
     ledger = []
@@ -216,6 +216,10 @@ def evidence_ledger(source, features, evidence):
                 row['links'].append({'kind': kind, 'path': 'source/' + path,
                                      'confirmation': '本文確認' if path in by_path else 'ファイル名のみ',
                                      'evidence_ids': by_path.get(path, [])})
+        row['reconstructed_documents'] = [
+            {'path': 'reconstructed/' + name, 'evidence_ids': meta['evidence_ids'],
+             'information_roles': meta['information_roles'], 'representation': 'researcher-reconstruction'}
+            for name, meta in read_json(DATA / 'reconstructed.json').items() if f['id'] in meta['feature_ids']]
         row['gaps'] = [
             'Original overview/detail/PT/ST deliverables are not established by file counts.',
             'Public tests have not been executed by this producer; runtime coverage is 未確認.',
@@ -279,9 +283,12 @@ def navigation(units):
 def load_tasks(path, policy):
     config = read_json(path)
     require(config.get('schema_version') == SCHEMA, 'Unsupported tasks schema')
+    require(set(config) == {'schema_version', 'tasks'}, 'Unknown tasks config fields')
     require(isinstance(config.get('tasks'), list) and config['tasks'], 'Empty task list')
     tasks, seen = [], set()
     for task in config['tasks']:
+        require(set(task) == {'id', 'request_file', 'request_sha256', 'evaluation_spec_sha256',
+                              'evaluation_spec_kind', 'target_features', 'common_features'}, 'Unknown task fields')
         tid = task['id']
         require(tid in policy['tasks'] and tid not in seen, 'Unknown/duplicate task ID')
         seen.add(tid)
@@ -317,6 +324,61 @@ def make_table(rows):
     return '\n'.join(lines) + '\n'
 
 
+def render_condition(corpus, task, request, units, selection_record, nav, authority,
+                     cid, dose, indexed, source_hash, semantic_hash):
+    tid = task['id']
+    by_id = {u['id']: u for u in units}
+    ordered = ordered_units(units, task)
+    selection = ''.join(ref(by_id[uid]) + '\n' for uid in selection_record['prefixes']['large']['ids']).encode('utf-8')
+    selected = selection_record['prefixes'].get(dose, {'ids': [], 'bytes': 0})
+    body = b''.join(unit_body(corpus, by_id[uid]) for uid in selected['ids'])
+    selected_index = selection if dose != 'explore' else b''
+    intro = ('Complete baseline materials are in source/, reconstructed/, common/.\n'
+             'The final change request follows and is also in request.md.\n'
+             + ('Global navigation: navigation/index.md.\n' if indexed else '')).encode('utf-8')
+    initial = intro + b'\n' + authority + b'\n# Final change request\n\n' + request
+    if selected_index:
+        initial += b'\n# Selection index\n\n' + selected_index
+    if selected['ids']:
+        initial += b'\n# Verbatim material sections\n\n'
+        for uid in selected['ids']:
+            unit = by_id[uid]
+            initial += ('\n[' + uid + '] ' + ref(unit) + '\n\n').encode('utf-8') + unit_body(corpus, unit)
+    initial_path = f'conditions/{tid}/{cid}/initial.md'
+    counts = {'target': 0, 'common': 0, 'rest': 0}
+    ranks = {u['id']: rank for u, rank in ordered}
+    for uid in selected['ids']:
+        counts[('target', 'common', 'rest')[ranks[uid]]] += by_id[uid]['bytes']
+    row = {'task': tid, 'condition': cid, 'dose': dose,
+                 'organization': 'indexed' if indexed else 'original',
+                 'initial_document_ids': selected['ids'], 'body_bytes': len(body), 'body_sha256': sha(body),
+                 'selection_index_bytes': len(selected_index), 'selection_index_sha256': sha(selected_index),
+                 'navigation_bytes': len(nav) if indexed else 0, 'navigation_sha256': sha(nav) if indexed else sha(b''),
+                 'common_authority_sha256': sha(authority), 'common_authority_bytes': len(authority),
+                 'request_sha256': sha(request), 'source_inventory_sha256': source_hash,
+                 'semantic_corpus_sha256': semantic_hash,
+                 'evaluation_spec_sha256': task['evaluation_spec_sha256'], 'evaluation_spec_kind': task['evaluation_spec_kind'],
+                 'initial_path': initial_path, 'initial_sha256': sha(initial), 'initial_bytes': len(initial),
+                 'proxy_tokens_bytes_div_4_ceil': proxy(len(initial)), 'relevance_bytes': counts,
+                 'worker_mounts': ['corpus/', f'tasks/{tid}/request.md'] + (['navigation/index.md'] if indexed else [])}
+    return row, initial
+
+
+def check_seal(manifest):
+    seal = read_json(DATA / 'selection-seal.json')
+    for key in ('source_inventory_sha256', 'semantic_corpus_sha256'):
+        require(manifest[key] == seal[key], f'Sealed {key} changed')
+    require(digest(manifest['selection_policy']) == seal['selection_policy_sha256'], 'Sealed policy changed')
+    require(bool(manifest['selections']), 'No selections')
+    for tid, selection in manifest['selections'].items():
+        require(tid in seal['selections'], 'Unsealed task')
+        require(digest(selection['ranked_units']) == seal['selections'][tid]['ranked_units_sha256'], 'Sealed order changed')
+        require(selection['prefixes'] == seal['selections'][tid]['prefixes'], 'Sealed dose sets changed')
+        require(selection['selection_policy_sha256'] == seal['selection_policy_sha256'], 'Task policy hash changed')
+        for key in ('target_features', 'common_features'):
+            require(selection['task'][key] == manifest['selection_policy']['tasks'][tid][key], 'Task priorities changed')
+
+
 def generate(archive, tasks_path, output):
     require(not output.exists(), 'Output already exists; preservation requires a fresh path')
     lock = read_json(DATA / 'source.lock.json')
@@ -339,7 +401,6 @@ def generate(archive, tasks_path, output):
         write(root / 'navigation/index.md', nav)
         semantic_entries = inventory(corpus)
         semantic_hash = digest(semantic_entries)
-        by_id = {u['id']: u for u in units}
         authority = (corpus / 'common/authority.md').read_bytes()
         rows, selections = [], {}
         for task, request in tasks:
@@ -350,41 +411,11 @@ def generate(archive, tasks_path, output):
             selections[tid] = {'task': task, 'ranked_units': [{'id': u['id'], 'rank': rank} for u, rank in ordered],
                                'prefixes': dict(zip(('small', 'medium', 'large'), chosen)),
                                'selection_policy_sha256': digest(policy)}
-            # Same prospective selection index (all units through large) for every dose.
-            selection = ''.join(ref(by_id[uid]) + '\n' for uid in chosen[2]['ids']).encode('utf-8')
             for cid, dose, indexed in CONDITIONS:
-                selected = selections[tid]['prefixes'].get(dose, {'ids': [], 'bytes': 0})
-                body = b''.join(unit_body(corpus, by_id[uid]) for uid in selected['ids'])
-                selected_index = selection if dose != 'explore' else b''
-                intro = ('Complete baseline materials are in source/, reconstructed/, common/.\n'
-                         'The final change request follows and is also in request.md.\n'
-                         + ('Global navigation: navigation/index.md.\n' if indexed else '')).encode('utf-8')
-                initial = intro + b'\n' + authority + b'\n# Final change request\n\n' + request
-                if selected_index:
-                    initial += b'\n# Selection index\n\n' + selected_index
-                if selected['ids']:
-                    initial += b'\n# Verbatim material sections\n\n'
-                    for uid in selected['ids']:
-                        unit = by_id[uid]
-                        initial += ('\n[' + uid + '] ' + ref(unit) + '\n\n').encode('utf-8') + unit_body(corpus, unit)
-                initial_path = f'conditions/{tid}/{cid}/initial.md'
-                write(root / initial_path, initial)
-                counts = {'target': 0, 'common': 0, 'rest': 0}
-                ranks = {u['id']: rank for u, rank in ordered}
-                for uid in selected['ids']:
-                    counts[('target', 'common', 'rest')[ranks[uid]]] += by_id[uid]['bytes']
-                rows.append({'task': tid, 'condition': cid, 'dose': dose,
-                             'organization': 'indexed' if indexed else 'original',
-                             'initial_document_ids': selected['ids'], 'body_bytes': len(body), 'body_sha256': sha(body),
-                             'selection_index_bytes': len(selected_index), 'selection_index_sha256': sha(selected_index),
-                             'navigation_bytes': len(nav) if indexed else 0, 'navigation_sha256': sha(nav) if indexed else sha(b''),
-                             'common_authority_sha256': sha(authority), 'common_authority_bytes': len(authority),
-                             'request_sha256': sha(request), 'source_inventory_sha256': digest(source_entries),
-                             'semantic_corpus_sha256': semantic_hash,
-                             'evaluation_spec_sha256': task['evaluation_spec_sha256'], 'evaluation_spec_kind': task['evaluation_spec_kind'],
-                             'initial_path': initial_path, 'initial_sha256': sha(initial), 'initial_bytes': len(initial),
-                             'proxy_tokens_bytes_div_4_ceil': proxy(len(initial)), 'relevance_bytes': counts,
-                             'worker_mounts': ['corpus/', f'tasks/{tid}/request.md'] + (['navigation/index.md'] if indexed else [])})
+                row, initial = render_condition(corpus, task, request, units, selections[tid], nav, authority,
+                                                cid, dose, indexed, digest(source_entries), semantic_hash)
+                write(root / row['initial_path'], initial)
+                rows.append(row)
         manifest = {'schema_version': SCHEMA, 'source_lock': lock, 'selection_policy': policy,
                     'producer_inputs_sha256': digest(producer_inventory()),
                     'source_inventory_sha256': digest(source_entries), 'semantic_corpus_sha256': semantic_hash,
@@ -393,6 +424,7 @@ def generate(archive, tasks_path, output):
                     'navigation_sha256': sha(nav), 'conditions': rows,
                     'token_estimate_method': 'ceil(UTF-8 bytes/4); proxy only, not model tokens or context-admission evidence',
                     'public_tests_executed': False, 'private_evaluator_accessed': False}
+        check_seal(manifest)
         write(root / 'conditions.md', make_table(rows))
         # Complete output inventory detects missing/extra files, including worker contamination.
         manifest['output_inventory'] = inventory(root)
@@ -405,6 +437,7 @@ def generate(archive, tasks_path, output):
 def verify(bundle):
     manifest = read_json(bundle / 'manifest.json')
     require(manifest['schema_version'] == SCHEMA, 'Unsupported bundle schema')
+    check_seal(manifest)
     actual = [e for e in inventory(bundle) if e['path'] != 'manifest.json']
     require(actual == manifest['output_inventory'], 'Output files changed, missing, or added')
     corpus = bundle / 'corpus'
@@ -419,10 +452,10 @@ def verify(bundle):
     features = read_json(DATA / 'features.json')['features']
     units, omissions = document_units(corpus, features, read_json(DATA / 'reconstructed.json'), lock)
     require(units == manifest['document_units'] and omissions == manifest['document_omissions'], 'Document provenance mismatch')
+    require(manifest['evidence'] == read_json(DATA / 'evidence.json')['evidence'], 'Evidence records changed')
     require(evidence_ledger(corpus / 'source', features, manifest['evidence']) == manifest['feature_ledger'], 'Feature ledger mismatch')
     nav = navigation(units)
     require((bundle / 'navigation/index.md').read_bytes() == nav and sha(nav) == manifest['navigation_sha256'], 'Navigation differs from headings/references')
-    by_id = {u['id']: u for u in units}
     require(len(manifest['conditions']) == 7 * len(manifest['selections']), 'Expected seven conditions per task')
     for tid, selection in manifest['selections'].items():
         task = selection['task']
@@ -434,17 +467,13 @@ def verify(bundle):
         require({r['condition'] for r in rows} == {x[0] for x in CONDITIONS} and len(rows) == 7, 'Condition set mismatch')
         request = (bundle / 'tasks' / tid / 'request.md').read_bytes()
         require(sha(request) == task['request_sha256'], 'Final requirement changed')
-        for row in rows:
-            for key, value in [('request_sha256', sha(request)), ('source_inventory_sha256', lock['inventory_sha256']),
-                               ('semantic_corpus_sha256', digest(entries)), ('evaluation_spec_sha256', task['evaluation_spec_sha256'])]:
-                require(row[key] == value, f'Cross-condition {key} mismatch')
-            expected_ids = selection['prefixes'].get(row['dose'], {'ids': []})['ids']
-            require(row['initial_document_ids'] == expected_ids, 'Condition body set mismatch')
-            body = b''.join(unit_body(corpus, by_id[uid]) for uid in expected_ids)
-            require(row['body_sha256'] == sha(body) and row['body_bytes'] == len(body), 'Body hash/length mismatch')
-            initial = (bundle / row['initial_path']).read_bytes()
-            require(sha(initial) == row['initial_sha256'] and len(initial) == row['initial_bytes'], 'Initial message mismatch')
-            require(request in initial and (corpus / 'common/authority.md').read_bytes() in initial, 'Common text absent')
+        for row, (cid, dose, indexed) in zip(rows, CONDITIONS):
+            expected_row, initial = render_condition(
+                corpus, task, request, units, selection, nav,
+                (corpus / 'common/authority.md').read_bytes(), cid, dose, indexed,
+                lock['inventory_sha256'], manifest['semantic_corpus_sha256'])
+            require(row == expected_row, 'Condition metadata differs from regenerated row')
+            require((bundle / row['initial_path']).read_bytes() == initial, 'Initial message differs from complete regenerated prompt')
         for dose in ('explore', 'medium'):
             pair = [r for r in rows if r['dose'] == dose]
             require(len({r['body_sha256'] for r in pair}) == 1 and len({r['selection_index_sha256'] for r in pair}) == 1,
