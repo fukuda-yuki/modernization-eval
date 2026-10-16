@@ -59,8 +59,14 @@ class GatewayDeadlineTests(unittest.TestCase):
                     try:client.getresponse().read()
                     except (OSError,http.client.HTTPException):pass
                 path=Path(directory)/'events.jsonl'
-                while not path.exists() and time.monotonic()-started<5:time.sleep(.01)
-                event=json.loads(path.read_text().splitlines()[-1])
+                # Opening an append journal creates it before the terminal JSON
+                # line is flushed. Wait for a complete record, not just a path.
+                while time.monotonic()-started<5:
+                    raw=path.read_bytes() if path.exists() else b''
+                    if raw.endswith(b'\n'):
+                        event=json.loads(raw.splitlines()[-1]);break
+                    time.sleep(.01)
+                else:self.fail('Gateway did not persist a complete terminal event')
                 elapsed=time.monotonic()-started
                 self.assertLess(elapsed,1.4)
                 self.assertEqual('provider_deadline_exceeded',event['status'])
