@@ -1,0 +1,114 @@
+{
+  "system-overview.md": {
+    "feature_ids": [
+      "customers-groups",
+      "loan-lifecycle",
+      "savings-deposits",
+      "transfers",
+      "accounting",
+      "organization-access",
+      "business-date-cob"
+    ],
+    "information_roles": [
+      "business-overview",
+      "architecture"
+    ],
+    "evidence_ids": [
+      "CUSTOMER-API",
+      "GROUP-API",
+      "FIXED-API",
+      "RECURRING-API",
+      "TRANSFER-API",
+      "ACCOUNTING-API",
+      "OFFICE-API",
+      "ROLE-API",
+      "BD-API"
+    ]
+  },
+  "delinquency-detail.md": {
+    "feature_ids": [
+      "loan-delinquency",
+      "business-date-cob",
+      "events",
+      "persistence"
+    ],
+    "information_roles": [
+      "specification",
+      "design",
+      "public-test-guidance"
+    ],
+    "evidence_ids": [
+      "PAUSE-DOC",
+      "PAUSE-HELPER",
+      "PAUSE-VALIDATION",
+      "PAUSE-TEST",
+      "BD-API"
+    ]
+  },
+  "savings-detail.md": {
+    "feature_ids": [
+      "savings-deposits",
+      "business-date-cob",
+      "accounting"
+    ],
+    "information_roles": [
+      "specification",
+      "design",
+      "public-test-guidance"
+    ],
+    "evidence_ids": [
+      "SAVINGS-DOC",
+      "SAVINGS-HELPER",
+      "SAVINGS-TEST",
+      "SAVINGS-VALIDATION",
+      "FIXED-VALIDATION",
+      "FIXED-API"
+    ]
+  },
+  "charges-detail.md": {
+    "feature_ids": [
+      "charges",
+      "savings-deposits",
+      "loan-lifecycle",
+      "working-capital",
+      "organization-access",
+      "accounting"
+    ],
+    "information_roles": [
+      "specification",
+      "design",
+      "public-test-guidance"
+    ],
+    "evidence_ids": [
+      "CHARGE-DOC",
+      "CHARGE-API",
+      "CHARGE-SERVICE",
+      "CHARGE-OPTIONS",
+      "CHARGE-TIME",
+      "CHARGE-CALC",
+      "CHARGE-APPLIES"
+    ]
+  },
+  "process-checklist.md": {
+    "feature_ids": [
+      "loan-delinquency",
+      "savings-deposits",
+      "charges",
+      "business-date-cob",
+      "accounting",
+      "persistence"
+    ],
+    "information_roles": [
+      "public-test-guidance",
+      "process-checklist"
+    ],
+    "evidence_ids": [
+      "BD-DOC",
+      "BD-API",
+      "BD-TEST",
+      "PAUSE-TEST",
+      "SAVINGS-TEST",
+      "CHARGE-API"
+    ]
+  }
+}

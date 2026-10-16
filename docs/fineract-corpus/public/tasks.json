@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "tasks": [
+    {
+      "id": "FINERACT-DELINQUENCY-RESUME",
+      "request_file": "FINERACT-DELINQUENCY-RESUME.md",
+      "request_sha256": "86ac602600b57e0a5e1062a1952401838fb04b44da63001139592951c491ddb3",
+      "evaluation_spec_sha256": "0ed340305e319b87f2096211f45957a48ffcfbfa614c64ccce611fb56864c308",
+      "evaluation_spec_kind": "public-contract",
+      "target_features": [
+        "loan-delinquency"
+      ],
+      "common_features": [
+        "business-date-cob",
+        "events",
+        "persistence"
+      ]
+    },
+    {
+      "id": "FINERACT-SAVINGS-MONTH-END",
+      "request_file": "FINERACT-SAVINGS-MONTH-END.md",
+      "request_sha256": "82ff60fb2a19b34cebbc08304c06b717fc24b79b7aa7f2dfb8cc9df1f4004511",
+      "evaluation_spec_sha256": "0ed340305e319b87f2096211f45957a48ffcfbfa614c64ccce611fb56864c308",
+      "evaluation_spec_kind": "public-contract",
+      "target_features": [
+        "savings-deposits"
+      ],
+      "common_features": [
+        "business-date-cob",
+        "accounting",
+        "api-contract"
+      ]
+    },
+    {
+      "id": "FINERACT-CHARGE-TEMPLATE",
+      "request_file": "FINERACT-CHARGE-TEMPLATE.md",
+      "request_sha256": "a6f5610951638db9120feb1a12a6f8b142840d167bd8f876541dbfc1035d2b95",
+      "evaluation_spec_sha256": "0ed340305e319b87f2096211f45957a48ffcfbfa614c64ccce611fb56864c308",
+      "evaluation_spec_kind": "public-contract",
+      "target_features": [
+        "charges"
+      ],
+      "common_features": [
+        "working-capital",
+        "api-contract",
+        "organization-access",
+        "accounting"
+      ]
+    }
+  ]
+}
