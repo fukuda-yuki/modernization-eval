@@ -1,0 +1,11 @@
+// Preparation only: acquire fixed upstream integration-test runtime dependencies
+// before the isolated offline evaluator is allowed to run.
+allprojects { project ->
+    project.afterEvaluate {
+        if (project.name == 'integration-tests') {
+            project.tasks.register('resolveAcceptanceRuntime') {
+                doLast { project.configurations.testRuntimeClasspath.files.each { file -> file.length() } }
+            }
+        }
+    }
+}

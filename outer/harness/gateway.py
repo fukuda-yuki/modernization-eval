@@ -124,7 +124,7 @@ class Gateway(ThreadingHTTPServer):
 
     def __init__(self, address, root, run_id, model, secret, *, upstream_host='opencode.ai',
                  upstream_port=443, tls=True, session_id=None, upstream_timeout=120, expected_prompt=None,
-                 staged_input=None):
+                 staged_input=None, campaign_budget=None):
         super().__init__(address, Handler)
         self.root, self.run_id, self.model, self.secret = Path(root), run_id, model, secret
         self.session_id = session_id or run_id
@@ -132,6 +132,7 @@ class Gateway(ThreadingHTTPServer):
         self.upstream_timeout = upstream_timeout
         self.expected_prompt = Path(expected_prompt).read_bytes().decode('utf-8') if expected_prompt else None
         self.input_checked = False
+        self.campaign_budget = campaign_budget
         self.lock = threading.Lock()
         self.failed = threading.Event()
         self.stopping = threading.Event()
@@ -444,7 +445,17 @@ class Handler(BaseHTTPRequestHandler):
         upstream_socket = None
         sent_headers = False
         response_fence = None
+        campaign_reserved = False
         try:
+            if g.campaign_budget is not None:
+                try:
+                    g.campaign_budget.reserve(rid, g.session_id)
+                    campaign_reserved = True
+                    event['campaign_admission'] = 'reserved'
+                except Exception:
+                    event['campaign_admission'] = 'denied_or_unavailable'
+                    g.admission_closed.set()
+                    raise
             cls = http.client.HTTPSConnection if g.tls else http.client.HTTPConnection
             connection = cls(g.upstream_host, g.upstream_port, timeout=g.upstream_timeout)
             connection.connect()
@@ -574,6 +585,13 @@ class Handler(BaseHTTPRequestHandler):
                     (g.admission_closed.is_set() and event['send_evidence'] == 'known_no_send')):
                 g.failed.set()
             g.record('events.jsonl', event)
+            if campaign_reserved:
+                try:
+                    g.campaign_budget.finish(rid, event.get('usage'), event['status'])
+                except Exception:
+                    g.failed.set()
+                    g.record('control.jsonl', {'run_id':g.run_id, 'at':now(),
+                                             'reason':'campaign_usage_persistence_failed'})
             if g.failed.is_set():
                 g.record('failure.jsonl', {'run_id': g.run_id, 'request_id': rid,
                                           'status': event['status'], 'at': now()})
@@ -621,14 +639,21 @@ def main():
     p.add_argument('--directory', default='/records')
     p.add_argument('--expected-prompt')
     p.add_argument('--staged-input', help='Controller-only contract directory; never a worker mount')
+    p.add_argument('--campaign-budget', help='Trusted shared admission database; never a worker mount')
     args = p.parse_args()
     import sys
     secret = sys.stdin.readline().strip()
     if not secret:
         raise SystemExit('Gateway credential is missing')
+    budget = None
+    if args.campaign_budget:
+        from campaign_budget import Budget
+        budget = Budget(args.campaign_budget)
+        budget.snapshot()  # Refuse missing/unreadable policy before listening.
     server = Gateway(('0.0.0.0', 8080), args.directory, args.run_id, args.model, secret,
                      session_id=args.session_id, upstream_timeout=args.upstream_timeout,
-                     expected_prompt=args.expected_prompt, staged_input=args.staged_input)
+                     expected_prompt=args.expected_prompt, staged_input=args.staged_input,
+                     campaign_budget=budget)
     server.serve_with_signals()
 
 
