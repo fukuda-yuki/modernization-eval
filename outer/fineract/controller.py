@@ -130,10 +130,15 @@ def new_attempt(ledger,assignment,now,*,retry=False):
 
 def readiness(root,settings,plan):
     if not settings['synthetic']:
-        if digest(runtime_definition(settings))!=plan['runtime_sha256']:
+        actual=runtime_definition(settings);context=None
+        scope_path=root/'confirmation-scope.json'
+        if scope_path.exists():
+            from .continuation import scoped_context
+            context=scoped_context(root,settings,plan,actual)
+        elif digest(actual)!=plan['runtime_sha256']:
             raise ValueError('Runtime files or frozen dependencies changed')
         validate_readiness(plan,util.read_json(root/'approval.json'),
-                           **util.read_json(root/'readiness.json'),now=time.time())
+                           **util.read_json(root/'readiness.json'),now=time.time(),campaign_context=context)
 
 
 def finish(root,settings,attempt,reason):
@@ -193,6 +198,8 @@ def wave(root,settings,plan,ledger,assignments,*,retry=False,halt_after_launch=F
         while any(a['status']=='running' for a in attempts):
             if time.time()>=ledger['deadline'] or (root/'stop-request.json').exists():
                 ledger['halt_reason']='deadline_or_operator_stop'
+            if any((root/name).exists() for name in ('confirmation-revoked.json','contradictory-setting-evidence.json')):
+                ledger['halt_reason']='confirmation_revoked_or_contradicted'
             snapshot=box.budget_action(settings,'snapshot')
             if (snapshot['reserved_requests']>=LIMITS['requests']
                     or snapshot['observed_tokens_lower_bound']>=LIMITS['observed_input_output_tokens']):

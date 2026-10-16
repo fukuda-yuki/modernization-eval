@@ -84,7 +84,7 @@ def validate_approval(plan, receipt):
         raise ValueError('Current instruction must explicitly bind this exact finite plan')
 
 
-def validate_readiness(plan, approval, *, materials, runtime, calibration, billing, now):
+def validate_readiness(plan, approval, *, materials, runtime, calibration, billing, now, campaign_context=None):
     """Fail closed on a review hold, incomplete scoring or unknown paid fallback.
 
     Receipts come from the trusted controller and documented read-only checks.
@@ -121,6 +121,26 @@ def validate_readiness(plan, approval, *, materials, runtime, calibration, billi
     if (billing.get('provider')!='opencode-go' or billing.get('use_balance') is not False
             or not hash_value(billing.get('workspace_binding_sha256'))
             or not billing.get('read_only_evidence_reference')
-            or type(observed) not in (int,float) or not 0<=now-observed<=3600):
+            or type(observed) not in (int,float) or observed>now
+            or billing.get('revoked') or billing.get('contradictory_setting_evidence')):
+        raise ValueError('Valid configured-route evidence required; no paid fallback or revocation')
+    if billing.get('verification_method')=='explicit_user_confirmation' and campaign_context is not None:
+        context=campaign_context;scope=context['scope'];started=context['started_epoch'];deadline=context['deadline']
+        if (scope.get('kind')!='explicit-user-confirmation-campaign-scope-v1'
+                or scope.get('campaign_instance')!=context['campaign_instance']
+                or scope.get('plan_sha256')!=digest(plan)
+                or scope.get('workspace_binding_sha256')!=billing['workspace_binding_sha256']
+                or not hash_value(scope.get('confirmation_record_sha256'))
+                or scope.get('confirmation_record_sha256')!=billing.get('confirmation_record_sha256')
+                or scope.get('confirmation_record_sha256')!=approval.get('user_confirmation_sha256')
+                or scope.get('confirmed_at_epoch')!=observed
+                or scope.get('started_epoch')!=started or scope.get('deadline')!=deadline
+                or type(started) not in (int,float) or type(deadline) not in (int,float)
+                or not 0<=started-observed<=3600 or not started<=now<deadline
+                or not 0<deadline-started<=LIMITS['wall_seconds']+0.001
+                or scope.get('revoked') is not False or scope.get('contradictory_setting_evidence') is not False
+                or not scope.get('decision_reference')):
+            raise ValueError('Explicit confirmation is not valid for this original finite campaign')
+    elif not 0<=now-observed<=3600:
         raise ValueError('Recent read-only workspace proof of paid fallback OFF required')
     return {'ready':True,'plan_sha256':digest(plan),'review_reference':materials['review_reference']}

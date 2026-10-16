@@ -200,3 +200,36 @@ These commands preserve prior records, containers and volumes. Output paths must
 be new. The synthetic interruption option `run --halt-after-launch` is rejected
 for live campaigns. Keep the PC and Docker running while a local build or
 campaign is active; sleep or shutdown interrupts execution and requires recovery.
+
+## Explicit confirmation scoped to an existing campaign
+
+An explicit user configuration confirmation may be bound to one already-started
+campaign through its **original** wall deadline. This is separate from the
+one-hour freshness rule for independent settings observations. It does not turn
+user attestation into a screen observation, refresh its timestamp, extend the
+deadline, change the provider/model, or authorize paid fallback or another campaign.
+
+The administrative scope binds the campaign instance, original plan and settings,
+configured credential-route hash, confirmation-record hash, original approval and
+readiness bytes, original start/deadline, and reviewed policy-code delta. Only
+`campaign.py`, `controller.py`, and the administrative continuation module may
+differ; worker/gateway/evaluator images, inputs, evaluation code and limits remain
+identical. Revocation and contradictory-setting evidence fence further admission.
+
+An existing supervisor must not be patched in place. After its model workers have
+finished and their artifacts are collected, stop that exact supervisor at an
+evaluation checkpoint and reconcile only its owned evaluator resources. Retain
+any incomplete evaluator attempt separately; evaluate its saved source again
+without replaying the model. A verified supervisor-exit receipt and a checkpoint
+of the original ledger and still-open shared budget are mandatory. A closed
+budget is never reopened. The continuation command is one-use and only schedules
+untried assignments plus the original eligible technical-retry allowance.
+
+```text
+python -m outer.fineract.continuation prepare --record <existing-campaign> --base-runtime <original-runtime-definition.json> --decision-reference <exact-authorized-amendment> --decision-sha256 <review-hash> --supervisor-exit-receipt <verified-exit.json>
+python -m outer.fineract.continuation continue --record <existing-campaign>
+```
+
+Original plan, settings, approval, readiness, Run UUIDs, evaluations, submissions,
+request/token reservations and wall deadline are preserved. An interruption of
+this continuation requires explicit recovery; it is never automatically replayed.
