@@ -11,7 +11,10 @@ python -m tools.fineract_corpus generate \
 python -m tools.fineract_corpus verify --bundle /absolute/new-bundle
 ```
 
-`generate` is offline, Python standard library only, and refuses an existing output.
+The validated environment is CPython 3.11/3.12 on Linux/POSIX. Preserve executable
+mode bits in the corpus filesystem; on Windows, use a Linux container/WSL filesystem.
+Native Windows generation is not validated. `generate` is offline, Python standard
+library only, and refuses an existing output.
 The archive must match the repository/SHA/archive digest in `source.lock.json`.
 `tasks.json` schema:
 
