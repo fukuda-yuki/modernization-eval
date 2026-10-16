@@ -93,7 +93,7 @@ FINERACT_SOURCE_ARCHIVE=/tmp/fineract-source.tar.gz \
   python -m unittest discover -s tests/fineract_corpus -v
 ```
 
-検証環境はLinux/POSIXのCPython 3.11/3.12。原本の実行属性も固定するため、
+検証環境はLinux/POSIXのCPython 3.12。原本の実行属性も固定するため、
 WindowsではLinux container/WSLのfilesystemを使用する。native Windows生成は未検証。
 生成はoffline、Python標準ライブラリのみ。既存outputを上書きしない。
 テストは別ディレクトリへ2回生成し、manifest/promptを含む全ファイルのbyte同一性を確認する。
