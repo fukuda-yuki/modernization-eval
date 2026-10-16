@@ -50,7 +50,7 @@ def collect(record):
     runtime.docker('cp',data['container']+':/result/.',output)
     report=util.read_json(output/'result.json') if (output/'result.json').is_file() else None
     result={'at':run.now(),'state':item['State'],'record':str(root),'running':False,
-        'status':'unknown' if report is None or item['State']['OOMKilled'] else report['status'],
+        'status':'unknown' if report is None or item['State']['OOMKilled'] or item['State']['ExitCode']!=0 else report['status'],
         'counts':None if report is None else report['counts'],'evidence_files':util.tree_hashes(output),
         'model_calls':0}
     util.write_new_json(root/'result.json',result)

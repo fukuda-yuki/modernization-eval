@@ -78,14 +78,22 @@ The local Docker VM exposes about 30.2 GiB and 16 CPUs. Core/provider builds use
 one Gradle worker, a 2 GiB Gradle heap, 768 MiB test/compiler heaps and a 6 GiB
 container limit. The public OpenAPI client generation required an 8 GiB Gradle
 heap and 12 GiB preparation container; failed 2/4 GiB attempts are retained.
-This larger preparation is not a four-worker setting. Each current 5 GiB worker
-cannot generate the full public integration SDK from scratch. No precompiled
-SDK was silently added to worker inputs; that condition remains a design decision.
+This larger preparation is separate from the four-worker setting. The approved
+common runtime prepares both public Java clients serially from the pinned source
+and dependency-only seed. It exports only SDK JARs, classes, resources and a hashed
+inventory. Each 5 GiB worker gets an independent copy. The Gradle adapter consumes
+these outputs for the two client modules; production compilation and all test
+tasks remain enabled. Private evaluator snapshots and opaque project Gradle
+history never enter worker inputs. A fresh 5 GiB production build passed; its
+first API compilation exposed a second Feign SDK generator, so the complete
+public API runtime proof must use the dual-SDK preparation.
 
 Run evaluations serially after a worker wave releases memory. Four worker
 containers, their databases, SDK preparation and evaluation must not all run at
-once. The current four-worker probe verifies isolated source/state/cache/network
-and offline Gradle startup, not a complete four-way model/API execution.
+once. The synthetic four-worker probe exercises each dedicated PostgreSQL database
+and gateway, rejects cross-worker and internet connections, and retains stopped
+source artifacts. Its local SSE replies and usage are explicitly synthetic;
+this is infrastructure proof and makes no provider request.
 
 ## Shared finite admission contract
 
@@ -102,11 +110,15 @@ Missing usage remains null; known usage is a lower bound. In-flight responses ca
 cross the observed-token threshold; it is not a prepaid monetary guarantee.
 The optional gateway integration leaves historical callers unchanged.
 
-The final controller must additionally enforce four concurrent Runs, 15 normal runs plus at most two
+`controller.py` enforces four concurrent Runs, 15 normal runs plus at most two
 technical retries, 1,800 seconds/run, 600 seconds/provider request, 30,600 total
 run seconds and 14,400 wall seconds. Model errors, business failures, normal build
-failures and normal timeout are not technical-retry reasons. Such a controller is
-still pending; the plan/budget primitives alone are not that controller.
+failures and normal timeout are not technical-retry reasons. Durable allocation
+intents precede container creation. Recovery closes campaign admission, fences
+each gateway before stopping workers, and collects exact submissions. It never
+replays model attempts. Frozen submissions can be scored again with new result
+identities. A stopped campaign, exact artifact hashes and private execution
+specifications are required. A report with a nonzero client exit cannot pass.
 
 Readiness fails closed until the exact material review, four-worker runtime
 proof, independently approved calibrated Java/API/DB/COB evaluator and a recent workspace-bound read-only
@@ -118,7 +130,7 @@ in for evaluator approval, and calibration's own passing result is not that revi
 ## Evidence as of 2026-10-16
 
 - Independent corpus check: 18 tests, no skips; two builds reproduced all files.
-- Linux controller regression: 361 tests, nine existing optional skips, no errors.
+- Last committed Linux controller regression: 361 tests, nine existing optional skips, no errors.
   Windows full-suite behavior is not claimed; retained newline-sensitive tests
   require the Linux path. Node is installed only in the controller-test image.
 - Public Java helper checks: 2 delinquency and 9 savings tests passed.
@@ -132,7 +144,11 @@ in for evaluator approval, and calibration's own passing result is not that revi
   direct PostgreSQL checks passed. The private fixture base preserves post-test
   loan state for SQL checks; inherited public loan cleanup otherwise repays
   loans and removes active delinquency tags before inspection. Earlier attempts
-  are retained. Exact final baseline/mutant and review bindings remain private.
+  are retained. Independent review required stronger filtered READ authorization,
+  all-frequency ordinary-date preservation, and repeated-post monetary-state
+  checks. The replacement reference passes 53 API cases and 28 charge checks;
+  targeted regression replay and the new frozen release remain under validation.
+  Exact baseline/mutant and review bindings remain private.
 - Model calls: **0**. Current Go usage GET succeeds but does not expose the
   workspace paid-fallback setting. That proof remains unavailable.
 
@@ -143,3 +159,24 @@ failure from application failure, calibrate meaningful mutants, cover all
 preservation requirements, and treat observable API behavior as authoritative
 rather than require one internal helper implementation.
 
+
+## Finite execution and recovery commands
+
+```text
+python -m outer.fineract.sdk begin --preparation <preparation> --seed <public-seed>
+python -m outer.fineract.sdk collect --record <public-sdk>
+python -m outer.fineract.execution bind --preparation <preparation> --release <private-release.json> --output <new-public-binding>
+python -m outer.fineract.public_probe begin --settings <settings.json> --plan <plan.json> --output <new-public-proof>
+python -m outer.fineract.public_probe collect --record <public-proof>
+python -m outer.fineract.controller create-probe --settings <settings.json> --plan <plan.json> --output <new-synthetic-campaign>
+python -m outer.fineract.controller run --record <synthetic-campaign>
+python -m outer.fineract.controller create --settings <settings.json> --plan <plan.json> --approval <approval.json> --readiness <readiness.json> --output <new-live-campaign>
+python -m outer.fineract.controller recover --record <interrupted-campaign>
+python -m outer.fineract.controller score --record <stopped-live-campaign>
+python -m outer.fineract.execution restore-bundle --binding <public-binding> --output <new-recovery-proof>
+```
+
+These commands preserve prior records, containers and volumes. Output paths must
+be new. The synthetic interruption option `run --halt-after-launch` is rejected
+for live campaigns. Keep the PC and Docker running while a local build or
+campaign is active; sleep or shutdown interrupts execution and requires recovery.
