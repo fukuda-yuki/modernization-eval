@@ -1,7 +1,8 @@
 # Fineract runtime and acceptance preparation
 
 This implementation is a preparation and calibration path for issues #37–#39.
-It is **not yet a completed real-model campaign runner or an accepted evaluator**.
+The finite controller is implemented; **no real-model campaign has run and the
+revised evaluator still requires independent review**.
 The historical .NET runtime, E1/E2/E3 artifacts and frozen plans remain separate.
 
 ## Fixed inputs and boundaries
@@ -84,9 +85,11 @@ and dependency-only seed. It exports only SDK JARs, classes, resources and a has
 inventory. Each 5 GiB worker gets an independent copy. The Gradle adapter consumes
 these outputs for the two client modules; production compilation and all test
 tasks remain enabled. Private evaluator snapshots and opaque project Gradle
-history never enter worker inputs. A fresh 5 GiB production build passed; its
-first API compilation exposed a second Feign SDK generator, so the complete
-public API runtime proof must use the dual-SDK preparation.
+history never enter worker inputs. A fresh offline production/test build and
+a real public API test passed in one 5 GiB worker, with 3,936 production and 626
+test classes compiled. Measured peak memory was 5,168,979,968 bytes, below the
+5,368,709,120-byte cap, with zero OOM events. The dual-SDK export contains 3,852
+files (32,869,727 bytes). Earlier single-client and adapter failures are retained.
 
 Run evaluations serially after a worker wave releases memory. Four worker
 containers, their databases, SDK preparation and evaluation must not all run at
@@ -130,7 +133,8 @@ in for evaluator approval, and calibration's own passing result is not that revi
 ## Evidence as of 2026-10-16
 
 - Independent corpus check: 18 tests, no skips; two builds reproduced all files.
-- Last committed Linux controller regression: 361 tests, nine existing optional skips, no errors.
+- Linux controller CI at `76d2ec9`: 370 tests, nine existing optional skips, no errors.
+  The subsequent immutable-image binding check also passed in the focused suite.
   Windows full-suite behavior is not claimed; retained newline-sensitive tests
   require the Linux path. Node is installed only in the controller-test image.
 - Public Java helper checks: 2 delinquency and 9 savings tests passed.
@@ -147,8 +151,14 @@ in for evaluator approval, and calibration's own passing result is not that revi
   are retained. Independent review required stronger filtered READ authorization,
   all-frequency ordinary-date preservation, and repeated-post monetary-state
   checks. The replacement reference passes 53 API cases and 28 charge checks;
-  targeted regression replay and the new frozen release remain under validation.
+  direct PostgreSQL checks also pass 46/46. Targeted regression replay and the
+  new frozen release remain under validation.
   Exact baseline/mutant and review bindings remain private.
+- Four concurrent dual-SDK workers passed dedicated DB/gateway, cross-worker,
+  internet, credential/mount and resource-isolation checks. A separate synthetic
+  interruption recovered all four original UUIDs and exact source artifacts,
+  with gateway fencing and no replay. Public corpus recovery verified all 7,804
+  output files in a new volume.
 - Model calls: **0**. Current Go usage GET succeeds but does not expose the
   workspace paid-fallback setting. That proof remains unavailable.
 

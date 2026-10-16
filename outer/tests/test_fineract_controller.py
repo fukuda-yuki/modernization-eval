@@ -13,6 +13,25 @@ from outer.tests.test_fineract_campaign import fixture
 
 
 class FiniteControllerTests(unittest.TestCase):
+    def test_runtime_binding_includes_trusted_build_and_api_images(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            for name,body in [('prep',{'source_commit':'source','archive_sha256':'a'*64,'java_image_id':'java-a'}),
+                              ('seed',{'inventory_sha256':'b'*64}),
+                              ('sdk',{'success':True,'private_inputs':False,'archive_sha256':'a'*64,
+                                      'inventory_sha256':'c'*64,'build':{'jar_sha256':'d'*64}})]:
+                (root/name).mkdir();util.write_new_json(root/name/'result.json',body)
+            settings={'preparation':str(root/'prep'),'seed':str(root/'seed'),'public_sdk':str(root/'sdk'),
+                      'worker_image':'worker','gateway_image':'gateway','api_image':'api-a','agent':{},
+                      'worker_build_policy':{'kind':'prepared_public_sdk','decision_reference':'test'}}
+            before=digest(controller.runtime_definition(settings))
+            settings['api_image']='api-b'
+            self.assertNotEqual(before,digest(controller.runtime_definition(settings)))
+            settings['api_image']='api-a'
+            prep=util.read_json(root/'prep/result.json');prep['java_image_id']='java-b'
+            util.write_json_atomic(root/'prep/result.json',prep)
+            self.assertNotEqual(before,digest(controller.runtime_definition(settings)))
+
     def test_complete_reports_do_not_override_failed_process_exit(self):
         good={'state':{'ExitCode':0,'Running':False,'OOMKilled':False}}
         self.assertTrue(completed_successfully(good))

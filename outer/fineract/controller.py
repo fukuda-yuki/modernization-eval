@@ -18,7 +18,7 @@ from .seed import volume
 
 
 def validate_settings(settings):
-    for key in ('worker_image','gateway_image'):
+    for key in ('worker_image','gateway_image','api_image'):
         if not settings[key].startswith('sha256:') or runtime.image_id(settings[key])!=settings[key]:
             raise ValueError('Immutable locally available image required')
     agent=settings['agent']
@@ -41,6 +41,7 @@ def runtime_definition(settings):
     if not sdk['success'] or sdk['private_inputs'] is not False or sdk['archive_sha256']!=prep['archive_sha256']:
         raise ValueError('Verified independent public SDK required')
     return {'worker_image':settings['worker_image'],'gateway_image':settings['gateway_image'],
+            'api_image':settings['api_image'],'java_image':prep['java_image_id'],
             'agent':settings['agent'],'source_commit':prep['source_commit'],
             'archive_sha256':prep['archive_sha256'],'seed_inventory_sha256':seed['inventory_sha256'],
             'public_sdk_inventory_sha256':sdk['inventory_sha256'],'public_sdk_jar_sha256':sdk['build']['jar_sha256'],
