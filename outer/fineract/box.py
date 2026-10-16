@@ -187,7 +187,8 @@ def allocate(root,settings,assignment,ident):
           '--mount',f'type=bind,source={root / "initial.md"},target=/contract/initial.md,readonly']
     if settings['synthetic']:
         args+=['--entrypoint','python3',settings['gateway_image'],'/app/probe_gateway.py']
-    else:args+=[settings['gateway_image'],'--model','deepseek-v4.1-flash','--upstream-timeout','600']
+    else:args+=[settings['gateway_image'],'--model','deepseek-v4.1-flash',
+               '--upstream-timeout','600','--upstream-deadline','600']
     args+=['--run-id',ident,'--campaign-budget','/budget/admission.sqlite','--expected-prompt','/contract/initial.md']
     runtime.docker(*args)
     util.write_new_json(root/'allocated.json',data)

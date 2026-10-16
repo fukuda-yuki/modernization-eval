@@ -37,6 +37,7 @@ def main():
                     'synthetic-no-provider-credential',upstream_host='127.0.0.1',
                     upstream_port=upstream.server_port,tls=False,session_id=a.run_id,
                     expected_prompt=a.expected_prompt,
+                    upstream_timeout=600, upstream_deadline=600,
                     campaign_budget=Budget(a.campaign_budget))
     gateway.serve_with_signals()
 

@@ -2,8 +2,18 @@
 
 This implementation is a preparation and calibration path for issues #37–#39.
 The finite controller is implemented; **no real-model campaign has run and the
-revised evaluator still requires independent review**.
+runtime deadline correction still requires independent review**.
 The historical .NET runtime, E1/E2/E3 artifacts and frozen plans remain separate.
+
+Fineract gateways opt into a 600-second monotonic absolute provider-request
+deadline across DNS, TCP/TLS connection, response headers and streamed body.
+Expiry closes the request's upstream sockets even during a continuous stream
+or after a client disconnect. Partial usage stays incomplete with
+`provider_deadline_exceeded`; this is not an eligible technical retry. Historical
+gateway callers that omit `--upstream-deadline` retain their socket-timeout
+behavior. The immutable gateway image, gateway source hash and deadline policy
+are bound into the common runtime and finite plan. Local synthetic deadline
+tests use loopback traffic and do not call a provider.
 
 ## Fixed inputs and boundaries
 

@@ -25,6 +25,11 @@ class FiniteControllerTests(unittest.TestCase):
                       'worker_image':'worker','gateway_image':'gateway','api_image':'api-a','agent':{},
                       'worker_build_policy':{'kind':'prepared_public_sdk','decision_reference':'test'}}
             before=digest(controller.runtime_definition(settings))
+            definition=controller.runtime_definition(settings)
+            self.assertEqual(600,definition['provider_request_deadline']['seconds'])
+            self.assertEqual('monotonic',definition['provider_request_deadline']['clock'])
+            self.assertEqual(util.sha256_file(Path(controller.__file__).parents[1]/'harness/gateway.py'),
+                             definition['gateway_source_sha256'])
             settings['api_image']='api-b'
             self.assertNotEqual(before,digest(controller.runtime_definition(settings)))
             settings['api_image']='api-a'
@@ -71,6 +76,13 @@ class FiniteControllerTests(unittest.TestCase):
         with self.assertRaises(ValueError):controller.new_attempt(ledger,row,101)
         previous['technical_failure']=True
         previous['stop_confirmed']=False
+        with self.assertRaises(ValueError):controller.new_attempt(ledger,row,101,retry=True)
+
+    def test_provider_deadline_is_not_a_technical_retry(self):
+        ledger=self.ledger();row=self.assignment(0)
+        previous=controller.new_attempt(ledger,row,100)
+        previous.update(status='finished',end_reason='provider_deadline_exceeded',stop_confirmed=True)
+        self.assertFalse(previous['technical_failure'])
         with self.assertRaises(ValueError):controller.new_attempt(ledger,row,101,retry=True)
 
     def test_only_two_technical_retries_and_new_identifiers(self):

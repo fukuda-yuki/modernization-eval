@@ -46,6 +46,10 @@ def runtime_definition(settings):
             'archive_sha256':prep['archive_sha256'],'seed_inventory_sha256':seed['inventory_sha256'],
             'public_sdk_inventory_sha256':sdk['inventory_sha256'],'public_sdk_jar_sha256':sdk['build']['jar_sha256'],
             'worker_build_policy':settings['worker_build_policy'],'worker_memory':'5g','worker_cpus':3,
+            'provider_request_deadline':{'seconds':600,'clock':'monotonic',
+                'scope':'dns_connect_tls_headers_body','on_expiry':'close_owned_sockets',
+                'partial_usage':'incomplete'},
+            'gateway_source_sha256':util.sha256_file(Path(__file__).parents[1]/'harness/gateway.py'),
             'database_image':box.POSTGRES,'database_memory':'1g','gateway_memory':'512m',
             'controller_files':{p.name:util.sha256_file(p) for p in sorted(Path(__file__).parent.iterdir()) if p.is_file()}}
 
