@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "repository": "https://github.com/apache/fineract",
+  "release": "1.15.0",
+  "commit": "d5636847ac556c30b437254c353f05526d172b97",
+  "archive_url": "https://codeload.github.com/apache/fineract/tar.gz/d5636847ac556c30b437254c353f05526d172b97",
+  "archive_sha256": "ee6fed2a9c5574d2dbbc19403704db25c341e89db190f6cb99c258d71518727a",
+  "file_count": 7772,
+  "inventory_sha256": "e3d23465c917d9e9f10b3b9a08f3be701269e7247af71b84d74b9a0fad9079d6",
+  "license_paths": [
+    "LICENSE_SOURCE",
+    "NOTICE_SOURCE",
+    "LICENSE_RELEASE",
+    "NOTICE_RELEASE",
+    "APACHE_LICENSETEXT.md"
+  ],
+  "dependency_status": "Only producer dependencies (Python standard library) are needed here. Java/Gradle/DB artifact caches and execution admission belong to #37–39; not fetched or asserted by #36."
+}

@@ -1,0 +1,311 @@
+{
+  "schema_version": 1,
+  "definition": "IDs group business capabilities, not files, sections, test cases, or independent samples. Cross-cutting support capabilities are identified separately by their labels.",
+  "features": [
+    {
+      "id": "customers-groups",
+      "label": "顧客・グループ管理",
+      "documents": [],
+      "code": [
+        "fineract-provider/src/main/java/org/apache/fineract/portfolio/client/api/ClientsApiResource.java",
+        "fineract-provider/src/main/java/org/apache/fineract/portfolio/group/api/GroupsApiResource.java"
+      ],
+      "public_tests": [
+        "integration-tests/src/test/java/org/apache/fineract/integrationtests/ClientTest.java"
+      ],
+      "depends_on": [
+        "organization-access"
+      ],
+      "coverage": "Representative entry points; not exhaustive functional or test coverage. Links are filename-only unless a body-confirmed evidence record overrides them."
+    },
+    {
+      "id": "loan-lifecycle",
+      "label": "融資契約・実行・返済",
+      "documents": [
+        "fineract-doc/src/docs/en/chapters/features/approved-amount-modification.adoc",
+        "fineract-doc/src/docs/en/chapters/features/contract-termination.adoc",
+        "fineract-doc/src/docs/en/chapters/features/downpayment.adoc",
+        "fineract-doc/src/docs/en/chapters/features/loan-origination-details.adoc",
+        "fineract-doc/src/docs/en/chapters/features/loan-product-templates.adoc"
+      ],
+      "code": [
+        "fineract-provider/src/main/java/org/apache/fineract/portfolio/loanaccount/api/LoansApiResource.java"
+      ],
+      "public_tests": [
+        "integration-tests/src/test/java/org/apache/fineract/integrationtests/DelinquencyActionIntegrationTests.java"
+      ],
+      "depends_on": [
+        "customers-groups",
+        "accounting",
+        "business-date-cob"
+      ],
+      "coverage": "Representative entry points; not exhaustive functional or test coverage. Links are filename-only unless a body-confirmed evidence record overrides them."
+    },
+    {
+      "id": "loan-delinquency",
+      "label": "融資延滞・休止",
+      "documents": [
+        "fineract-doc/src/docs/en/chapters/features/pause-delinquency.adoc"
+      ],
+      "code": [
+        "fineract-loan/src/main/java/org/apache/fineract/portfolio/delinquency/helper/DelinquencyEffectivePauseHelperImpl.java",
+        "fineract-loan/src/main/java/org/apache/fineract/portfolio/delinquency/service/DelinquencyReadPlatformServiceImpl.java",
+        "fineract-loan/src/main/java/org/apache/fineract/portfolio/delinquency/validator/DelinquencyActionParseAndValidator.java",
+        "fineract-loan/src/main/java/org/apache/fineract/portfolio/delinquency/domain/LoanDelinquencyActionRepository.java"
+      ],
+      "public_tests": [
+        "integration-tests/src/test/java/org/apache/fineract/integrationtests/DelinquencyActionIntegrationTests.java",
+        "fineract-provider/src/test/java/org/apache/fineract/portfolio/delinquency/validator/DelinquencyActionParseAndValidatorTest.java"
+      ],
+      "depends_on": [
+        "loan-lifecycle",
+        "business-date-cob",
+        "events",
+        "persistence"
+      ],
+      "coverage": "Representative entry points; not exhaustive functional or test coverage. Links are filename-only unless a body-confirmed evidence record overrides them."
+    },
+    {
+      "id": "loan-schedule",
+      "label": "融資返済再編・利息計算",
+      "documents": [
+        "fineract-doc/src/docs/en/chapters/features/backdated-interest-modification.adoc",
+        "fineract-doc/src/docs/en/chapters/features/delayed-schedule-captures.adoc",
+        "fineract-doc/src/docs/en/chapters/features/interest-rate-change-progressive-loans.adoc",
+        "fineract-doc/src/docs/en/chapters/features/re-ageing.adoc",
+        "fineract-doc/src/docs/en/chapters/features/re-amortization.adoc"
+      ],
+      "code": [
+        "fineract-provider/src/main/java/org/apache/fineract/portfolio/loanaccount/api/LoansApiResource.java"
+      ],
+      "public_tests": [],
+      "depends_on": [
+        "loan-lifecycle",
+        "accounting"
+      ],
+      "coverage": "Representative entry points; not exhaustive functional or test coverage. Links are filename-only unless a body-confirmed evidence record overrides them."
+    },
+    {
+      "id": "savings-deposits",
+      "label": "貯蓄・定期・積立預金",
+      "documents": [
+        "fineract-doc/src/docs/en/chapters/features/savings-interest-posting.adoc"
+      ],
+      "code": [
+        "fineract-core/src/main/java/org/apache/fineract/portfolio/savings/domain/SavingsHelper.java",
+        "fineract-provider/src/main/java/org/apache/fineract/portfolio/savings/api/SavingsAccountsApiResource.java",
+        "fineract-provider/src/main/java/org/apache/fineract/portfolio/savings/api/FixedDepositAccountsApiResource.java",
+        "fineract-provider/src/main/java/org/apache/fineract/portfolio/savings/api/RecurringDepositAccountsApiResource.java"
+      ],
+      "public_tests": [
+        "fineract-core/src/test/java/org/apache/fineract/portfolio/savings/domain/SavingsHelperAnniversaryPostingTest.java",
+        "fineract-savings/src/test/java/org/apache/fineract/portfolio/savings/domain/SavingsAccountAnniversaryValidationTest.java",
+        "fineract-savings/src/test/java/org/apache/fineract/portfolio/savings/domain/FixedDepositProductAnniversaryValidationTest.java",
+        "integration-tests/src/test/java/org/apache/fineract/integrationtests/SavingsInterestPostingIntegrationTest.java"
+      ],
+      "depends_on": [
+        "customers-groups",
+        "business-date-cob",
+        "accounting"
+      ],
+      "coverage": "Representative entry points; not exhaustive functional or test coverage. Links are filename-only unless a body-confirmed evidence record overrides them."
+    },
+    {
+      "id": "transfers",
+      "label": "口座間振替",
+      "documents": [],
+      "code": [
+        "fineract-provider/src/main/java/org/apache/fineract/portfolio/account/api/AccountTransfersApiResource.java"
+      ],
+      "public_tests": [],
+      "depends_on": [
+        "savings-deposits",
+        "loan-lifecycle",
+        "accounting"
+      ],
+      "coverage": "Representative entry points; not exhaustive functional or test coverage. Links are filename-only unless a body-confirmed evidence record overrides them."
+    },
+    {
+      "id": "charges",
+      "label": "手数料テンプレート・賦課",
+      "documents": [
+        "fineract-doc/src/docs/en/chapters/features/charges-template-filters.adoc",
+        "fineract-doc/src/docs/en/chapters/features/loan-charges.adoc",
+        "fineract-doc/src/docs/en/chapters/features/taxes-on-loan-charges.adoc"
+      ],
+      "code": [
+        "fineract-charge/src/main/java/org/apache/fineract/portfolio/charge/api/ChargesApiResource.java",
+        "fineract-provider/src/main/java/org/apache/fineract/portfolio/charge/service/ChargeReadPlatformServiceImpl.java",
+        "fineract-charge/src/main/java/org/apache/fineract/portfolio/charge/service/ChargeDropdownReadPlatformServiceImpl.java",
+        "fineract-charge/src/main/java/org/apache/fineract/portfolio/charge/domain/ChargeAppliesTo.java",
+        "fineract-charge/src/main/java/org/apache/fineract/portfolio/charge/domain/ChargeCalculationType.java"
+      ],
+      "public_tests": [
+        "integration-tests/src/test/java/org/apache/fineract/integrationtests/LoanChargeTaxIntegrationTest.java"
+      ],
+      "depends_on": [
+        "loan-lifecycle",
+        "savings-deposits",
+        "working-capital",
+        "accounting",
+        "organization-access"
+      ],
+      "coverage": "Representative entry points; not exhaustive functional or test coverage. Links are filename-only unless a body-confirmed evidence record overrides them."
+    },
+    {
+      "id": "accounting",
+      "label": "会計仕訳・収益配賦",
+      "documents": [
+        "fineract-doc/src/docs/en/chapters/features/journal-entry-aggregation.adoc",
+        "fineract-doc/src/docs/en/chapters/features/buydown-fee.adoc",
+        "fineract-doc/src/docs/en/chapters/features/capitalized-income.adoc"
+      ],
+      "code": [
+        "fineract-provider/src/main/java/org/apache/fineract/accounting/journalentry/api/JournalEntriesApiResource.java"
+      ],
+      "public_tests": [
+        "integration-tests/src/test/java/org/apache/fineract/integrationtests/SavingsAccrualAccountingIntegrationTest.java"
+      ],
+      "depends_on": [
+        "loan-lifecycle",
+        "savings-deposits",
+        "charges"
+      ],
+      "coverage": "Representative entry points; not exhaustive functional or test coverage. Links are filename-only unless a body-confirmed evidence record overrides them."
+    },
+    {
+      "id": "asset-externalization",
+      "label": "融資資産外部化",
+      "documents": [
+        "fineract-doc/src/docs/en/chapters/features/asset-externalization.adoc"
+      ],
+      "code": [
+        "fineract-provider/src/main/java/org/apache/fineract/portfolio/loanaccount/api/LoansApiResource.java"
+      ],
+      "public_tests": [],
+      "depends_on": [
+        "loan-lifecycle",
+        "accounting"
+      ],
+      "coverage": "Representative entry points; not exhaustive functional or test coverage. Links are filename-only unless a body-confirmed evidence record overrides them."
+    },
+    {
+      "id": "working-capital",
+      "label": "運転資金融資",
+      "documents": [
+        "fineract-doc/src/docs/en/chapters/features/working-capital-accrual-deferred-revenue-amortization-accounting.adoc",
+        "fineract-doc/src/docs/en/chapters/features/working-capital-amortization-schedule.adoc",
+        "fineract-doc/src/docs/en/chapters/features/working-capital-breach-grace-days.adoc",
+        "fineract-doc/src/docs/en/chapters/features/working-capital-breach-management.adoc",
+        "fineract-doc/src/docs/en/chapters/features/working-capital-charges.adoc",
+        "fineract-doc/src/docs/en/chapters/features/working-capital-credit-balance-refund.adoc",
+        "fineract-doc/src/docs/en/chapters/features/working-capital-delinquency-management.adoc",
+        "fineract-doc/src/docs/en/chapters/features/working-capital-discount-fee-txn.adoc",
+        "fineract-doc/src/docs/en/chapters/features/working-capital-discount.adoc",
+        "fineract-doc/src/docs/en/chapters/features/working-capital-eir-calculation-accounting.adoc",
+        "fineract-doc/src/docs/en/chapters/features/working-capital-eir-calculation.adoc",
+        "fineract-doc/src/docs/en/chapters/features/working-capital-goodwill-credit.adoc",
+        "fineract-doc/src/docs/en/chapters/features/working-capital-loan-start-dates.adoc",
+        "fineract-doc/src/docs/en/chapters/features/working-capital-payment-allocation.adoc",
+        "fineract-doc/src/docs/en/chapters/features/working-capital-planned-projected-balances-eir.adoc"
+      ],
+      "code": [
+        "fineract-working-capital-loan/src/main/java/org/apache/fineract/portfolio/workingcapitalloan/api/WorkingCapitalLoanChargesApiResource.java",
+        "fineract-working-capital-loan/src/main/java/org/apache/fineract/portfolio/workingcapitalloan/api/WorkingCapitalLoanDelinquencyActionApiResource.java"
+      ],
+      "public_tests": [
+        "integration-tests/src/test/java/org/apache/fineract/integrationtests/WorkingCapitalLoanDelinquencyActionIntegrationTest.java"
+      ],
+      "depends_on": [
+        "charges",
+        "accounting",
+        "business-date-cob"
+      ],
+      "coverage": "Representative entry points; not exhaustive functional or test coverage. Links are filename-only unless a body-confirmed evidence record overrides them."
+    },
+    {
+      "id": "organization-access",
+      "label": "組織・権限",
+      "documents": [],
+      "code": [
+        "fineract-provider/src/main/java/org/apache/fineract/organisation/office/api/OfficesApiResource.java",
+        "fineract-provider/src/main/java/org/apache/fineract/useradministration/api/RolesApiResource.java"
+      ],
+      "public_tests": [
+        "integration-tests/src/test/java/org/apache/fineract/integrationtests/OfficeIntegrationTest.java",
+        "integration-tests/src/test/java/org/apache/fineract/integrationtests/RolesTest.java"
+      ],
+      "depends_on": [],
+      "coverage": "Representative entry points; not exhaustive functional or test coverage. Links are filename-only unless a body-confirmed evidence record overrides them."
+    },
+    {
+      "id": "business-date-cob",
+      "label": "業務日・日次処理",
+      "documents": [
+        "fineract-doc/src/docs/en/chapters/architecture/business-date.adoc",
+        "fineract-doc/src/docs/en/chapters/architecture/batch-jobs.adoc"
+      ],
+      "code": [
+        "fineract-core/src/main/java/org/apache/fineract/infrastructure/businessdate/api/BusinessDateApiResource.java",
+        "fineract-core/src/main/java/org/apache/fineract/infrastructure/businessdate/service/BusinessDateWritePlatformServiceImpl.java",
+        "fineract-cob/src/main/java/org/apache/fineract/cob/resolver/BusinessDateResolver.java"
+      ],
+      "public_tests": [
+        "fineract-e2e-tests-runner/src/test/resources/features/BusinessDate.feature",
+        "fineract-provider/src/test/java/org/apache/fineract/infrastructure/businessdate/service/BusinessDateReadPlatformServiceTest.java"
+      ],
+      "depends_on": [
+        "loan-lifecycle",
+        "savings-deposits",
+        "events"
+      ],
+      "coverage": "Representative entry points; not exhaustive functional or test coverage. Links are filename-only unless a body-confirmed evidence record overrides them."
+    },
+    {
+      "id": "events",
+      "label": "業務イベント配信",
+      "documents": [
+        "fineract-doc/src/docs/en/chapters/architecture/reliable-event-framework.adoc"
+      ],
+      "code": [
+        "fineract-loan/src/main/java/org/apache/fineract/infrastructure/event/business/domain/loan/LoanAccountDelinquencyPauseChangedBusinessEvent.java"
+      ],
+      "public_tests": [],
+      "depends_on": [
+        "loan-lifecycle"
+      ],
+      "coverage": "Representative entry points; not exhaustive functional or test coverage. Links are filename-only unless a body-confirmed evidence record overrides them."
+    },
+    {
+      "id": "persistence",
+      "label": "業務データ永続化",
+      "documents": [
+        "fineract-doc/src/docs/en/chapters/architecture/persistence.adoc"
+      ],
+      "code": [
+        "fineract-loan/src/main/java/org/apache/fineract/portfolio/delinquency/domain/LoanDelinquencyAction.java"
+      ],
+      "public_tests": [],
+      "depends_on": [
+        "loan-lifecycle"
+      ],
+      "coverage": "Representative entry points; not exhaustive functional or test coverage. Links are filename-only unless a body-confirmed evidence record overrides them."
+    },
+    {
+      "id": "api-contract",
+      "label": "API互換性・検証",
+      "documents": [
+        "fineract-doc/src/docs/en/chapters/architecture/api-backward-compatibility.adoc",
+        "fineract-doc/src/docs/en/chapters/architecture/validation.adoc"
+      ],
+      "code": [
+        "fineract-charge/src/main/java/org/apache/fineract/portfolio/charge/api/ChargesApiResource.java"
+      ],
+      "public_tests": [],
+      "depends_on": [
+        "organization-access"
+      ],
+      "coverage": "Representative entry points; not exhaustive functional or test coverage. Links are filename-only unless a body-confirmed evidence record overrides them."
+    }
+  ]
+}
