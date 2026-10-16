@@ -53,7 +53,8 @@ def prepare(preparation, private):
     receipt={'kind':'fineract-frozen-java-api-v1','id':ident,'at':run.now(),
         'preparation_id':prep['id'],'container':name,'volume':data,
         'java_image_id':prep['java_image_id'],'private_files':util.tree_hashes(root/'private'),
-        'expected_suites':spec['expected_suites'],'selectors':spec['selectors'],'model_calls':0}
+        'expected_suites':spec['expected_suites'],'expected_cases':spec.get('expected_cases'),
+        'selectors':spec['selectors'],'tasks':spec.get('tasks',{}),'model_calls':0}
     util.write_new_json(root/'request.json',receipt)
     volume(data,'modernization.java_harness='+ident,prep['java_image_id'])
     copy_volume(prep['volume'],data,prep['java_image_id'])
@@ -128,26 +129,29 @@ print(json.dumps(inventory,sort_keys=True,separators=(',',':')))
         image,'python3','-c',script,timeout=300).stdout)
 
 
-def begin(harness, service):
+def begin(harness, service, task=None):
     harness=Path(harness).resolve();service=Path(service).resolve()
     fixed=util.read_json(harness/'result.json');server=util.read_json(service/'started.json')
     if not fixed['success']:raise ValueError('Successful frozen API harness required')
     if fixed.get('snapshot_sha256')!=util.sha256_file(harness/'snapshot.json'):
         raise ValueError('Frozen evaluator dependency binding changed')
+    selected=fixed if task is None else fixed.get('tasks',{}).get(task)
+    if selected is None:raise ValueError('Task is absent from frozen evaluator binding')
     if inspect(service)['health'].get('http_status')!=200:raise ValueError('Healthy owned service required')
     ident=uuid.uuid4().hex;root=service/'java-api-checks'/ident;root.mkdir(parents=True)
     name='fe-java-api-'+ident;data='fe-java-api-data-'+ident
     receipt={'kind':'fineract-private-java-api-run-v1','id':ident,'at':run.now(),
         'harness_record':str(harness),'harness_result_sha256':util.sha256_file(harness/'result.json'),
         'service_record':str(service),'service_id':server['id'],'container':name,'volume':data,
-        'java_image_id':fixed['java_image_id'],'expected_suites':fixed['expected_suites'],'model_calls':0}
+        'java_image_id':fixed['java_image_id'],'task':task,'expected_suites':selected['expected_suites'],
+        'expected_cases':selected.get('expected_cases'),'model_calls':0}
     util.write_new_json(root/'request.json',receipt)
     volume(data,'modernization.java_api='+ident,fixed['java_image_id'])
     copy_volume(fixed['volume'],data,fixed['java_image_id'])
     if snapshot(data,fixed['java_image_id'])!=util.read_json(harness/'snapshot.json'):
         raise ValueError('Fresh evaluator copy differs from frozen snapshot')
     args=[]
-    for selector in fixed['selectors']:args+=['--tests',selector]
+    for selector in selected['selectors']:args+=['--tests',selector]
     runtime.docker('run','-d','--name',name,'--label','modernization.java_api='+ident,
         '--network','container:'+server['names']['app'],'--read-only','--user','1000:1000',
         '--cap-drop=ALL','--security-opt=no-new-privileges','--memory=6g','--cpus=4','--pids-limit=512',
@@ -175,8 +179,9 @@ def collect(record):
     readable=Path('\\\\?\\'+str(output)) if os.name=='nt' else output
     readable.mkdir()
     runtime.docker('cp',data['container']+':/prep/source/integration-tests/build/test-results/test/.',output,check=False)
+    runtime.docker('cp',data['container']+':/prep/api-fixtures.jsonl',output/'api-fixtures.jsonl',check=False)
     collection_error=None
-    try:junit=junit_result(readable,data['expected_suites'])
+    try:junit=junit_result(readable,data['expected_suites'],data.get('expected_cases'))
     except (ValueError,ET.ParseError) as error:
         collection_error=type(error).__name__
         junit={'status':'incomplete','cases':[],'executed':None,'passed':None,'failed':None,'skipped':None}
@@ -194,12 +199,50 @@ def summary(root,result):
         'environment_failure':result['environment_failure'],'model_calls':0}
 
 
+def seal_cases(harness, passing_run, task_map):
+    """Bind the observed complete case inventory without replacing old evidence.
+
+    This is a calibration metadata operation, not independent acceptance. The
+    caller's final execution spec still binds this new receipt and review.
+    """
+    harness=Path(harness).resolve();passing_run=Path(passing_run).resolve()
+    base=util.read_json(harness/'result.json')
+    request=util.read_json(passing_run/'started.json');result=util.read_json(passing_run/'result.json')
+    if (request['harness_result_sha256']!=util.sha256_file(harness/'result.json')
+            or result['junit']['status']!='passed' or result['environment_failure']
+            or result['state']['ExitCode']!=0):
+        raise ValueError('Complete passing run of this exact harness required')
+    cases=[{k:c[k] for k in ('suite','case')} for c in result['junit']['cases']]
+    if not cases or len({(c['suite'],c['case']) for c in cases})!=len(cases):
+        raise ValueError('Unique nonempty case inventory required')
+    mapping=util.read_json(task_map);tasks={};seen=set()
+    for task,item in mapping.items():
+        suites=set(item['expected_suites'])
+        if not suites or seen&suites or not suites.issubset(base['expected_suites']) or not item['selectors']:
+            raise ValueError('Task suites must partition the complete harness')
+        seen.update(suites)
+        tasks[task]={**item,'expected_cases':[c for c in cases if c['suite'] in suites]}
+    if seen!=set(base['expected_suites']):raise ValueError('Unassigned evaluator suite')
+    ident=uuid.uuid4().hex;root=harness.parent/ident;root.mkdir()
+    shutil.copytree(harness/'private',root/'private')
+    shutil.copyfile(harness/'snapshot.json',root/'snapshot.json')
+    sealed={**base,'id':ident,'at':run.now(),'expected_cases':cases,'tasks':tasks,
+        'parent_harness_record':str(harness),'parent_harness_sha256':util.sha256_file(harness/'result.json'),
+        'passing_calibration_record':str(passing_run),
+        'passing_calibration_sha256':util.sha256_file(passing_run/'result.json'),
+        'independent_review':'pending'}
+    util.write_new_json(root/'result.json',sealed)
+    return {'record':str(root),'expected_cases':len(cases),'tasks':sorted(tasks),'independent_review':'pending'}
+
+
 if __name__=='__main__':
     p=argparse.ArgumentParser();sub=p.add_subparsers(dest='command',required=True)
     s=sub.add_parser('prepare');s.add_argument('--preparation',required=True,type=Path);s.add_argument('--private',required=True,type=Path)
-    s=sub.add_parser('begin');s.add_argument('--harness',required=True,type=Path);s.add_argument('--service',required=True,type=Path)
+    s=sub.add_parser('begin');s.add_argument('--harness',required=True,type=Path);s.add_argument('--service',required=True,type=Path);s.add_argument('--task')
     for command in ('collect-preparation','collect'):sub.add_parser(command).add_argument('--record',required=True,type=Path)
+    s=sub.add_parser('seal-cases')
+    for name in ('harness','passing-run','task-map'):s.add_argument('--'+name,required=True,type=Path)
     a=p.parse_args()
-    result=prepare(a.preparation,a.private) if a.command=='prepare' else begin(a.harness,a.service) if a.command=='begin' else {
+    result=prepare(a.preparation,a.private) if a.command=='prepare' else begin(a.harness,a.service,a.task) if a.command=='begin' else seal_cases(a.harness,a.passing_run,a.task_map) if a.command=='seal-cases' else {
         'collect-preparation':collect_preparation,'collect':collect}[a.command](a.record)
     print(json.dumps(result))

@@ -59,7 +59,10 @@ sources in the build volume. HTTP/DB tests run in a separate trusted client. The
 Java API harness is compiled from fixed public SDK/fixtures plus private tests;
 its dependency snapshot is hashed, copied and verified before each run. Unlike
 worker seeds, that evaluator-only snapshot includes compiled canonical fixtures.
-Old reports are excluded and each API run creates new JUnit evidence. The client
+Old reports are excluded and each API run creates new JUnit evidence. Final
+bindings can require an exact case inventory and task-specific selectors; missing
+or substituted cases cannot pass. Each task evaluation requires a fresh DB, so
+loan/savings fixture-created accounting metadata cannot alter charge baselines. The client
 shares its owned app's network namespace so the public localhost TLS certificate
 works without changing host TLS/security settings. No ports are published.
 
@@ -75,7 +78,9 @@ The local Docker VM exposes about 30.2 GiB and 16 CPUs. Core/provider builds use
 one Gradle worker, a 2 GiB Gradle heap, 768 MiB test/compiler heaps and a 6 GiB
 container limit. The public OpenAPI client generation required an 8 GiB Gradle
 heap and 12 GiB preparation container; failed 2/4 GiB attempts are retained.
-This larger preparation is not a four-worker setting.
+This larger preparation is not a four-worker setting. Each current 5 GiB worker
+cannot generate the full public integration SDK from scratch. No precompiled
+SDK was silently added to worker inputs; that condition remains a design decision.
 
 Run evaluations serially after a worker wave releases memory. Four worker
 containers, their databases, SDK preparation and evaluation must not all run at
@@ -90,14 +95,14 @@ source/semantic inventories, actual execution specs, runtime and evaluator hashe
 A public-contract-only corpus cannot authorize model execution.
 
 `campaign_budget.py` uses a shared SQLite transaction before each upstream send.
-It bounds four concurrent provider requests, 1,700 total requests, the campaign
+It bounds 1,700 total requests, the campaign
 wall deadline and 90 million observed input+output tokens. Reservations survive
 crashes, duplicate request IDs are rejected and closed admission never reopens.
 Missing usage remains null; known usage is a lower bound. In-flight responses can
 cross the observed-token threshold; it is not a prepaid monetary guarantee.
 The optional gateway integration leaves historical callers unchanged.
 
-The final controller must additionally enforce 15 normal runs plus at most two
+The final controller must additionally enforce four concurrent Runs, 15 normal runs plus at most two
 technical retries, 1,800 seconds/run, 600 seconds/provider request, 30,600 total
 run seconds and 14,400 wall seconds. Model errors, business failures, normal build
 failures and normal timeout are not technical-retry reasons. Such a controller is
@@ -111,7 +116,7 @@ not prove paid fallback is disabled. Auth/billing settings must not be changed.
 ## Evidence as of 2026-10-16
 
 - Independent corpus check: 18 tests, no skips; two builds reproduced all files.
-- Linux controller regression: 359 tests, nine existing optional skips, no errors.
+- Linux controller regression: 361 tests, nine existing optional skips, no errors.
   Windows full-suite behavior is not claimed; retained newline-sensitive tests
   require the Linux path. Node is installed only in the controller-test image.
 - Public Java helper checks: 2 delinquency and 9 savings tests passed.

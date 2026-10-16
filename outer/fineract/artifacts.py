@@ -75,7 +75,7 @@ def extract_artifact(archive, destination):
     return files(destination)
 
 
-def junit_result(report_dir, expected_suites):
+def junit_result(report_dir, expected_suites, expected_cases=None):
     """Zero, skipped, missing, duplicate and malformed tests can never pass.
 
     Caller supplies fresh reports produced by its canonical launcher, never an
@@ -94,8 +94,14 @@ def junit_result(report_dir, expected_suites):
                 'skipped' if case.find('skipped') is not None else 'passed')
             cases.append({'suite':ident[0],'case':ident[1],'status':status})
     missing=sorted(set(expected_suites)-{c['suite'] for c in cases})
-    return {'status':'incomplete' if not cases or missing or any(c['status']=='skipped' for c in cases)
+    expected=None if expected_cases is None else {(c['suite'],c['case']) for c in expected_cases}
+    if expected is not None and (not expected or len(expected)!=len(expected_cases)):
+        raise ValueError('Nonempty unique frozen case inventory required')
+    missing_cases=[] if expected is None else sorted(expected-seen)
+    extra_cases=[] if expected is None else sorted(seen-expected)
+    return {'status':'incomplete' if not cases or missing or missing_cases or extra_cases or any(c['status']=='skipped' for c in cases)
             else 'failed' if any(c['status']=='failed' for c in cases) else 'passed',
-            'cases':cases,'missing_suites':missing,'executed':sum(c['status']!='skipped' for c in cases),
+            'cases':cases,'missing_suites':missing,'missing_cases':missing_cases,'extra_cases':extra_cases,
+            'executed':sum(c['status']!='skipped' for c in cases),
             'passed':sum(c['status']=='passed' for c in cases),'failed':sum(c['status']=='failed' for c in cases),
             'skipped':sum(c['status']=='skipped' for c in cases)}

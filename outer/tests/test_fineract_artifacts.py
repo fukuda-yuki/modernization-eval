@@ -45,3 +45,13 @@ class FineractArtifactTests(unittest.TestCase):
         self.assertEqual(junit_result(reports,['Other'])['status'],'incomplete')
         (reports/'TEST-copy.xml').write_bytes(path.read_bytes())
         with self.assertRaises(ValueError):junit_result(reports,['Suite'])
+
+    def test_deleted_or_substituted_case_cannot_satisfy_frozen_inventory(self):
+        reports=self.root/'reports';reports.mkdir()
+        (reports/'TEST-Suite.xml').write_text('<testsuite><testcase classname="Suite" name="other"/></testsuite>')
+        result=junit_result(reports,['Suite'],[{'suite':'Suite','case':'required'}])
+        self.assertEqual(result['status'],'incomplete')
+        self.assertEqual(result['missing_cases'],[('Suite','required')])
+        self.assertEqual(result['extra_cases'],[('Suite','other')])
+        result=junit_result(reports,['Suite'],[{'suite':'Suite','case':'other'}])
+        self.assertEqual(result['status'],'passed')

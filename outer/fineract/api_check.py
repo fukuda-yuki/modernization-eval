@@ -19,7 +19,7 @@ def begin(service,private,image,mode):
     private=Path(private).resolve();util.reject_links(private)
     if not (private/'check.py').is_file():raise ValueError('Private real API check required')
     ident=uuid.uuid4().hex;root=service/'api-checks'/ident;root.mkdir(parents=True)
-    shutil.copytree(private,root/'private')
+    shutil.copytree(private,root/'private',ignore=shutil.ignore_patterns('__pycache__','*.pyc'))
     name='fe-api-check-'+ident;output='fe-api-result-'+ident;image=runtime.image_id(image)
     receipt={'kind':'fineract-private-api-db-v1','id':ident,'at':run.now(),'service_id':data['id'],
         'service_record':str(service),'image_id':image,'mode':mode,'container':name,'volume':output,
