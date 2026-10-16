@@ -52,7 +52,9 @@ class FineractCampaignTests(unittest.TestCase):
         inputs={'materials':{'decision':'approved','review_reference':'synthetic',
             'selection_seal_sha256':'d'*64,'semantic_corpus_sha256':'a'*64},
             'runtime':{'runtime_sha256':'b'*64,'verified':True,'isolated_workers':4,'offline_fresh_build':True},
-            'calibration':{'evaluator_sha256':'c'*64,'tasks':{t:{'baseline_new_behavior':'failed',
+            'calibration':{'evaluator_sha256':'c'*64,'independent_review':{
+                'decision':'approved','review_reference':'synthetic','evaluator_sha256':'c'*64},
+                'tasks':{t:{'baseline_new_behavior':'failed',
                 'valid_gold':'passed','mutants':[{'verdict':'failed'}],
                 'verified_layers':['java','api','database','cob']} for t in TASKS}},
             'billing':{'provider':'opencode-go','use_balance':False,'workspace_binding_sha256':'e'*64,
@@ -60,6 +62,8 @@ class FineractCampaignTests(unittest.TestCase):
         self.assertTrue(validate_readiness(plan,approval,**inputs)['ready'])
         for field,updates in [('materials',{'decision':'pending'}),('materials',{'selection_seal_sha256':'f'*64}),
                 ('runtime',{'offline_fresh_build':False}),('calibration',{'tasks':{}}),
+                ('calibration',{'independent_review':{}}),
+                ('calibration',{'independent_review':{'decision':'approved','review_reference':'synthetic','evaluator_sha256':'f'*64}}),
                 ('billing',{'use_balance':None}),('billing',{'use_balance':True}),
                 ('billing',{'observed_at_epoch':-4000})]:
             changed=copy.deepcopy(inputs);changed[field].update(updates)

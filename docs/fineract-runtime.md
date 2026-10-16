@@ -109,9 +109,11 @@ failures and normal timeout are not technical-retry reasons. Such a controller i
 still pending; the plan/budget primitives alone are not that controller.
 
 Readiness fails closed until the exact material review, four-worker runtime
-proof, calibrated Java/API/DB/COB evaluator and a recent workspace-bound read-only
+proof, independently approved calibrated Java/API/DB/COB evaluator and a recent workspace-bound read-only
 proof of Go `Use balance` OFF are present. A key, Go URL or usage response does
 not prove paid fallback is disabled. Auth/billing settings must not be changed.
+The evaluator approval must bind its exact hash; material approval cannot stand
+in for evaluator approval, and calibration's own passing result is not that review.
 
 ## Evidence as of 2026-10-16
 
@@ -121,11 +123,16 @@ not prove paid fallback is disabled. Auth/billing settings must not be changed.
   require the Linux path. Node is installed only in the controller-test image.
 - Public Java helper checks: 2 delinquency and 9 savings tests passed.
 - Real public HTTP/API/COB: 3 tests passed against a disposable PostgreSQL service.
-- Draft private Java calibration: baseline 5 failed/3 passed; candidate 8 passed;
-  both fresh offline builds produced a real boot JAR.
+- Draft private Java calibration: baseline and mutant each 5 failed/3 passed;
+  candidate 8 passed. All three fresh offline builds produced a real boot JAR.
 - Private charge HTTP/DB calibration: baseline 13 failed/9 passed; candidate
-  22 passed. These are calibration checks, not model results.
-- New delinquency and savings/fixed-deposit API calibration is in progress.
+  22 passed; mutant 2 failed/20 passed, using the same hashed client bundle.
+  These are calibration checks, not model results.
+- Delinquency and savings/fixed-deposit reference: 47 API cases passed and 40
+  direct PostgreSQL checks passed. The private fixture base preserves post-test
+  loan state for SQL checks; inherited public loan cleanup otherwise repays
+  loans and removes active delinquency tags before inspection. Earlier attempts
+  are retained. Exact final baseline/mutant and review bindings remain private.
 - Model calls: **0**. Current Go usage GET succeeds but does not expose the
   workspace paid-fallback setting. That proof remains unavailable.
 

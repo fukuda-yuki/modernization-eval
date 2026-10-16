@@ -106,6 +106,10 @@ def validate_readiness(plan, approval, *, materials, runtime, calibration, billi
               'FINERACT-CHARGE-TEMPLATE':{'java','api','database'}}
     if calibration.get('evaluator_sha256')!=plan['evaluator_sha256']:
         raise ValueError('Actual evaluator calibration binding missing')
+    review=calibration.get('independent_review',{})
+    if (review.get('decision')!='approved' or not review.get('review_reference')
+            or review.get('evaluator_sha256')!=plan['evaluator_sha256']):
+        raise ValueError('Exact calibrated evaluator still requires independent review')
     for task,layers in required.items():
         item=calibration.get('tasks',{}).get(task,{})
         mutants=item.get('mutants',[])
