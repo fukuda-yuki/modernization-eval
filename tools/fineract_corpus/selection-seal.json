@@ -1,4 +1,5 @@
 {
+  "document_units_sha256": "7f0df052da950a53b5ad80abf575ea05aa5ec812e94e7a096e5f1b8c84414608",
   "excluded": [
     "gold patches",
     "private evaluators",
@@ -9,18 +10,18 @@
     "Issue #36 and #37 public bodies",
     "pinned baseline documentation, source, public tests"
   ],
-  "schema_version": 1,
-  "scope": "Seal materials, semantic bytes, tag-based order and dose sets before gold construction. Public request/evaluation implementation hashes may be bound by #37–39; do not use results to change material selection.",
-  "selection_policy_sha256": "1ded81d77575ab0b302ac91d9e3f3366cce069c2b608967601aaa7db2f4ba73f",
+  "navigation_sha256": "dc1e8366ad13ebb1a94d87735fda7057883843236faea5b006359aff77268138",
+  "schema_version": 2,
+  "scope": "Public-input revision 2; requires review before model admission.",
+  "selection_policy_sha256": "3409fabd4b02ec84badbe29ad3560272721cc692bd60a69ee46e6f2ad7ba195e",
   "selections": {
     "FINERACT-CHARGE-TEMPLATE": {
       "prefixes": {
         "large": {
           "budget_bytes": 131072,
-          "bytes": 128930,
+          "bytes": 127654,
           "ids": [
             "Dad3881f7adbe-001",
-            "D42f90d9f67c0-001",
             "D8b10ce73370b-001",
             "D8b10ce73370b-002",
             "Da69425359221-001",
@@ -33,8 +34,6 @@
             "Daf73d72de6c2-003",
             "Daf73d72de6c2-004",
             "Daf73d72de6c2-005",
-            "D97a2e334f4b1-001",
-            "D78321365eec6-001",
             "Dd7ab460bf2cf-001",
             "Dd7ab460bf2cf-002",
             "Dd7ab460bf2cf-003",
@@ -115,20 +114,29 @@
             "Ddc525955c053-019",
             "Ddc525955c053-020",
             "Ddc525955c053-021",
-            "D3cb183affbc6-001"
+            "D3cb183affbc6-001",
+            "D3cb183affbc6-002",
+            "D3cb183affbc6-003",
+            "D3cb183affbc6-004",
+            "D3cb183affbc6-005",
+            "D3cb183affbc6-006",
+            "D3cb183affbc6-007",
+            "D3cb183affbc6-008",
+            "D3cb183affbc6-009",
+            "D3cb183affbc6-010",
+            "D02172b9da625-001"
           ],
           "next_unit": {
-            "bytes": 3429,
-            "id": "D3cb183affbc6-002",
+            "bytes": 4212,
+            "id": "D02172b9da625-002",
             "reason": "next complete section exceeds remaining budget"
           }
         },
         "medium": {
           "budget_bytes": 32768,
-          "bytes": 32132,
+          "bytes": 32656,
           "ids": [
             "Dad3881f7adbe-001",
-            "D42f90d9f67c0-001",
             "D8b10ce73370b-001",
             "D8b10ce73370b-002",
             "Da69425359221-001",
@@ -141,40 +149,58 @@
             "Daf73d72de6c2-003",
             "Daf73d72de6c2-004",
             "Daf73d72de6c2-005",
-            "D97a2e334f4b1-001",
-            "D78321365eec6-001",
             "Dd7ab460bf2cf-001",
-            "Dd7ab460bf2cf-002"
+            "Dd7ab460bf2cf-002",
+            "Dd7ab460bf2cf-003",
+            "Dd7ab460bf2cf-004",
+            "Dd7ab460bf2cf-005",
+            "Dd7ab460bf2cf-006",
+            "Dd7ab460bf2cf-007",
+            "Dd7ab460bf2cf-008",
+            "Dd7ab460bf2cf-009",
+            "Dbb020d5a2f66-001",
+            "Dbb020d5a2f66-002",
+            "Dbb020d5a2f66-003",
+            "Dff773902d79d-001",
+            "Dff773902d79d-002",
+            "Dff773902d79d-003",
+            "Dff773902d79d-004",
+            "Dff773902d79d-005",
+            "Dff773902d79d-006",
+            "Dff773902d79d-007"
           ],
           "next_unit": {
-            "bytes": 911,
-            "id": "Dd7ab460bf2cf-003",
+            "bytes": 600,
+            "id": "Dff773902d79d-008",
             "reason": "next complete section exceeds remaining budget"
           }
         },
         "small": {
           "budget_bytes": 8192,
-          "bytes": 5171,
+          "bytes": 7510,
           "ids": [
-            "Dad3881f7adbe-001"
+            "Dad3881f7adbe-001",
+            "D8b10ce73370b-001",
+            "D8b10ce73370b-002",
+            "Da69425359221-001",
+            "Da69425359221-002"
           ],
           "next_unit": {
-            "bytes": 4585,
-            "id": "D42f90d9f67c0-001",
+            "bytes": 1884,
+            "id": "Da69425359221-003",
             "reason": "next complete section exceeds remaining budget"
           }
         }
       },
-      "ranked_units_sha256": "ca1e923f5afbd31b1da41f4e6b253743bbdcf8a1e986764dd95adb9cd7e16d53"
+      "ranked_units_sha256": "8b0c0062a7ba5be3b67746afae1167faac481e636acf8fcd231389a7ddd31896"
     },
     "FINERACT-DELINQUENCY-RESUME": {
       "prefixes": {
         "large": {
           "budget_bytes": 131072,
-          "bytes": 116559,
+          "bytes": 118559,
           "ids": [
             "D7d827b470735-001",
-            "D42f90d9f67c0-001",
             "D08e5e0747444-001",
             "D08e5e0747444-002",
             "D08e5e0747444-003",
@@ -186,8 +212,7 @@
             "D08e5e0747444-009",
             "D08e5e0747444-010",
             "D08e5e0747444-011",
-            "D97a2e334f4b1-001",
-            "D78321365eec6-001",
+            "D42f90d9f67c0-001",
             "D9f3753f1de76-001",
             "D9f3753f1de76-002",
             "D9f3753f1de76-003",
@@ -212,6 +237,8 @@
             "Ddfb5d2ab9627-005",
             "Ddfb5d2ab9627-006",
             "Dad3881f7adbe-001",
+            "D97a2e334f4b1-001",
+            "D78321365eec6-001",
             "Da335db6e5033-001",
             "D0db52d4852c1-001",
             "D01db4b2f672d-001",
@@ -227,10 +254,9 @@
         },
         "medium": {
           "budget_bytes": 32768,
-          "bytes": 29071,
+          "bytes": 31359,
           "ids": [
             "D7d827b470735-001",
-            "D42f90d9f67c0-001",
             "D08e5e0747444-001",
             "D08e5e0747444-002",
             "D08e5e0747444-003",
@@ -241,45 +267,50 @@
             "D08e5e0747444-008",
             "D08e5e0747444-009",
             "D08e5e0747444-010",
-            "D08e5e0747444-011"
+            "D08e5e0747444-011",
+            "D42f90d9f67c0-001",
+            "D9f3753f1de76-001",
+            "D9f3753f1de76-002",
+            "D9f3753f1de76-003"
           ],
           "next_unit": {
-            "bytes": 4579,
-            "id": "D97a2e334f4b1-001",
+            "bytes": 5666,
+            "id": "D9f3753f1de76-004",
             "reason": "next complete section exceeds remaining budget"
           }
         },
         "small": {
           "budget_bytes": 8192,
-          "bytes": 4440,
+          "bytes": 7820,
           "ids": [
-            "D7d827b470735-001"
+            "D7d827b470735-001",
+            "D08e5e0747444-001",
+            "D08e5e0747444-002",
+            "D08e5e0747444-003",
+            "D08e5e0747444-004"
           ],
           "next_unit": {
-            "bytes": 4585,
-            "id": "D42f90d9f67c0-001",
+            "bytes": 4519,
+            "id": "D08e5e0747444-005",
             "reason": "next complete section exceeds remaining budget"
           }
         }
       },
-      "ranked_units_sha256": "12d18adff38ac09c70ab62a65ea8f809bf9c51114f011008be4a41cae2b7380b"
+      "ranked_units_sha256": "360cfc6af93ecd43d9b162d28d3dcfc6389007e3b8823349b3932404602fdcb1"
     },
     "FINERACT-SAVINGS-MONTH-END": {
       "prefixes": {
         "large": {
           "budget_bytes": 131072,
-          "bytes": 125071,
+          "bytes": 127071,
           "ids": [
-            "Dad3881f7adbe-001",
-            "D42f90d9f67c0-001",
             "D97a2e334f4b1-001",
-            "D78321365eec6-001",
             "D22acc130857e-001",
             "D22acc130857e-002",
             "D22acc130857e-003",
             "D22acc130857e-004",
             "D22acc130857e-005",
-            "D7d827b470735-001",
+            "D42f90d9f67c0-001",
             "Dd7ab460bf2cf-001",
             "Dd7ab460bf2cf-002",
             "Dd7ab460bf2cf-003",
@@ -340,6 +371,9 @@
             "D0cd270a7ca51-007",
             "D0cd270a7ca51-008",
             "D0cd270a7ca51-009",
+            "Dad3881f7adbe-001",
+            "D7d827b470735-001",
+            "D78321365eec6-001",
             "Da335db6e5033-001",
             "D0db52d4852c1-001",
             "D01db4b2f672d-001",
@@ -355,46 +389,52 @@
         },
         "medium": {
           "budget_bytes": 32768,
-          "bytes": 32699,
+          "bytes": 30926,
           "ids": [
-            "Dad3881f7adbe-001",
-            "D42f90d9f67c0-001",
             "D97a2e334f4b1-001",
-            "D78321365eec6-001",
             "D22acc130857e-001",
             "D22acc130857e-002",
             "D22acc130857e-003",
             "D22acc130857e-004",
             "D22acc130857e-005",
-            "D7d827b470735-001",
+            "D42f90d9f67c0-001",
             "Dd7ab460bf2cf-001",
             "Dd7ab460bf2cf-002",
             "Dd7ab460bf2cf-003",
             "Dd7ab460bf2cf-004",
-            "Dd7ab460bf2cf-005"
+            "Dd7ab460bf2cf-005",
+            "Dd7ab460bf2cf-006",
+            "Dd7ab460bf2cf-007",
+            "Dd7ab460bf2cf-008",
+            "Dd7ab460bf2cf-009",
+            "D9f3753f1de76-001",
+            "D9f3753f1de76-002",
+            "D9f3753f1de76-003",
+            "D9f3753f1de76-004"
           ],
           "next_unit": {
-            "bytes": 571,
-            "id": "Dd7ab460bf2cf-006",
+            "bytes": 3344,
+            "id": "D9f3753f1de76-005",
             "reason": "next complete section exceeds remaining budget"
           }
         },
         "small": {
           "budget_bytes": 8192,
-          "bytes": 5171,
+          "bytes": 6607,
           "ids": [
-            "Dad3881f7adbe-001"
+            "D97a2e334f4b1-001",
+            "D22acc130857e-001"
           ],
           "next_unit": {
-            "bytes": 4585,
-            "id": "D42f90d9f67c0-001",
+            "bytes": 1648,
+            "id": "D22acc130857e-002",
             "reason": "next complete section exceeds remaining budget"
           }
         }
       },
-      "ranked_units_sha256": "420c8937533aaf651df1ce4e5c2d1ad74255bd32c28c31ad2a30978e07eb66f9"
+      "ranked_units_sha256": "281511dcda2c646275e655f264abecff16a5f410e91e2c399afb7d170816427d"
     }
   },
-  "semantic_corpus_sha256": "7b0c0f848999b2d7a53b86af8163ae37cb7d38ba997f538d752e954bdea3658f",
+  "semantic_corpus_sha256": "00eb6ec1fa1384ab535c0da5910559f02261ef154c3ea086c20816963e97acaf",
   "source_inventory_sha256": "e3d23465c917d9e9f10b3b9a08f3be701269e7247af71b84d74b9a0fad9079d6"
 }

@@ -1,4 +1,4 @@
-# Issue #36 producer contract (v1)
+# Issue #36 producer contract (materials revision 2)
 
 Scope: fixed materials only; consumers in #37–39 own execution, dependencies,
 private scoring, and admission. No model call is performed here.
@@ -11,7 +11,8 @@ python -m tools.fineract_corpus generate \
 python -m tools.fineract_corpus verify --bundle /absolute/new-bundle
 ```
 
-The validated environment is CPython 3.12 on Linux/POSIX. Preserve executable
+The validated environment is Linux/POSIX with the concrete Python version recorded
+in `validation.json`; CI uses CPython 3.12. Preserve executable
 mode bits in the corpus filesystem; on Windows, use a Linux container/WSL filesystem.
 Native Windows generation is not validated. `generate` is offline, Python standard
 library only, and refuses an existing output.
@@ -39,6 +40,21 @@ gold patches, result directories or raw model logs. Supported task IDs and featu
 priorities are frozen in `selection-policy.json`; consumers may bind the final
 public request bytes and real evaluation specification hash, not change priorities.
 A changed public request must be reviewed against that policy before use.
+
+`feature_ids` describe broad capability membership for navigation, including
+dependencies. `selection_feature_ids` describe the document's primary subject for
+selection; shared verification/date guidance is a common contract, and the general
+system overview has no task-priority tag. For example, the charge option table
+mentions savings charges but is not target interest-posting material. Its broad
+savings membership does not put it into the savings task's target prefix.
+
+All 275 units in the feature chapter (including title-only units and the index)
+have explicit body-anchored roles in `section-roles.json`. Roles distinguish API,
+validation, data model, accounting, calculations, examples and other content.
+They are primary section roles with explicitly annotated mixed sections, not an
+exhaustive sentence annotation. Original example scenarios are not test executions.
+The seal binds the full document-unit metadata and navigation hash as well as the
+semantic corpus, order and dose sets.
 
 Outputs:
 
@@ -78,3 +94,12 @@ separate pinned Java/Gradle/DB/dependency environment. Bundled build definitions
 are not an offline dependency cache or evidence of successful Fineract execution.
 `public-contract` binds a public specification only; it does not attest that an
 implementation of that evaluator exists. No model run is authorized by this bundle.
+
+An explicitly authorized material revision can be reviewed with
+`python -m tools.fineract_corpus propose-seal --source-archive /absolute/source.tar.gz --output /absolute/new-candidate.json`.
+This command is offline and refuses an existing output; it never replaces the
+active seal. Activate a reviewed candidate in a separate material revision, retain
+the previous seal and requirements, then regenerate and verify all conditions.
+Revision 1 snapshots remain under `docs/fineract-corpus/history/v1/`; restore the
+original producer from commit `69f22d90a624f7be0f0521fa2a3646155404c50f` for v1 generation.
+Revision 2 is awaiting Max's acceptance before any model admission.

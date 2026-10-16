@@ -15,6 +15,29 @@ TASKS = ROOT / 'docs/fineract-corpus/public/tasks.json'
 
 
 class MaterialUnitTests(unittest.TestCase):
+    def test_dependency_membership_does_not_imply_target_relevance(self):
+        units = [
+            {'id': 'fee', 'path': 'a', 'range_bytes': [0, 1],
+             'feature_ids': ['charges', 'savings-deposits'], 'selection_feature_ids': ['charges']},
+            {'id': 'interest', 'path': 'z', 'range_bytes': [0, 1],
+             'feature_ids': ['savings-deposits'], 'selection_feature_ids': ['savings-deposits']},
+        ]
+        task = {'target_features': ['savings-deposits'], 'common_features': ['business-date-cob']}
+        self.assertEqual([(u['id'], rank) for u, rank in p.ordered_units(units, task)],
+                         [('interest', 0), ('fee', 2)])
+
+    def test_public_requests_contain_business_contracts_without_solution_locations(self):
+        config = p.read_json(TASKS)
+        forbidden = ('SavingsHelper', 'IntegrationTests', 'ValidationTest', '.java', '.adoc',
+                     'gold patch', 'hidden case', '公開資料は', '公開要求→元資料', '研究者')
+        for task in config['tasks']:
+            body = (TASKS.parent / task['request_file']).read_text(encoding='utf-8')
+            for value in forbidden:
+                with self.subTest(task=task['id'], value=value):
+                    self.assertNotIn(value, body)
+        self.assertIn('HTTP400', (TASKS.parent / 'FINERACT-CHARGE-TEMPLATE.md').read_text(encoding='utf-8'))
+        self.assertIn('min(E,R−1)', (TASKS.parent / 'FINERACT-DELINQUENCY-RESUME.md').read_text(encoding='utf-8'))
+
     def test_sections_preserve_utf8_tables_and_code_exactly(self):
         data = ('= 文書\n\n== First\n\n|===\n|値\n== not a section\n|===\n'
                 '\n[source]\n----\n== code\n----\n\n== Second\n本文\n').encode()
@@ -106,6 +129,53 @@ class FullCorpusTests(unittest.TestCase):
             p.generate(self.archive, TASKS, other)
         self.assertEqual(p.inventory(self.bundle), p.inventory(other))
         self.assertEqual(p.verify(other), {'verified': True, 'conditions': 21, 'source_files': 7772})
+
+    def test_feature_sections_have_body_bound_roles_and_mixed_roles_where_needed(self):
+        units = [u for u in self.manifest['document_units'] if '/chapters/features/' in u['path']]
+        records = p.read_json(p.DATA / 'section-roles.json')['sections']
+        self.assertEqual(len(units), 275)
+        self.assertEqual({u['id'] for u in units}, set(records))
+        for unit in units:
+            self.assertEqual(unit['information_roles'], [e['role'] for e in unit['information_role_evidence']])
+            body = p.unit_body(self.bundle / 'corpus', unit).decode('utf-8')
+            for evidence in unit['information_role_evidence']:
+                self.assertIn(evidence['anchor'], body)
+        pause = {u['original_heading']: u['information_roles'] for u in units if u['path'].endswith('/pause-delinquency.adoc')}
+        self.assertEqual(pause['Database Design'], ['data-model'])
+        self.assertEqual(pause['Validation Rules'], ['validation-rules'])
+        self.assertEqual(pause['Example Scenarios'], ['worked-examples'])
+        savings = next(u for u in units if u['path'].endswith('/savings-interest-posting.adoc') and u['original_heading'] == 'How Anniversary Posting Works')
+        self.assertEqual(savings['information_roles'], ['calculation-rules', 'worked-examples'])
+
+    def test_savings_small_is_interest_material_and_fee_document_is_rest(self):
+        tid = 'FINERACT-SAVINGS-MONTH-END'
+        units = {u['id']: u for u in self.manifest['document_units']}
+        selection = self.manifest['selections'][tid]
+        small = [units[uid] for uid in selection['prefixes']['small']['ids']]
+        self.assertTrue(any(u['path'] == 'reconstructed/savings-detail.md' for u in small))
+        self.assertTrue(all('savings-deposits' in u['selection_feature_ids'] for u in small))
+        fees = next(u for u in units.values() if u['path'] == 'reconstructed/charges-detail.md')
+        self.assertIn('savings-deposits', fees['feature_ids'])
+        self.assertEqual(next(r['rank'] for r in selection['ranked_units'] if r['id'] == fees['id']), 2)
+
+    def test_seal_candidate_is_reproducible_and_does_not_replace_active_seal(self):
+        active = (p.DATA / 'selection-seal.json').read_bytes()
+        candidate = self.root / 'candidate.json'
+        p.propose_seal(self.archive, candidate)
+        self.assertEqual(candidate.read_bytes(), active)
+        self.assertEqual((p.DATA / 'selection-seal.json').read_bytes(), active)
+        with self.assertRaisesRegex(ValueError, 'already exists'):
+            p.propose_seal(self.archive, candidate)
+
+    def test_metadata_and_navigation_are_bound_to_selection_seal(self):
+        for key in ('document_units', 'navigation_sha256'):
+            changed = copy.deepcopy(self.manifest)
+            if key == 'document_units':
+                changed[key][0]['information_roles'] = ['unrequested-hint']
+            else:
+                changed[key] = '0' * 64
+            with self.subTest(key=key), self.assertRaisesRegex(ValueError, 'Sealed document metadata|Sealed navigation'):
+                p.check_seal(changed)
 
     def test_seven_conditions_and_original_corpus_preserved(self):
         m = self.manifest

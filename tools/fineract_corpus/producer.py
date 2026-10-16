@@ -144,8 +144,6 @@ def proxy(n):
 
 
 def roles(path):
-    if '/features/' in path:
-        return ['business-overview', 'specification', 'design']
     if '/architecture/' in path:
         return ['architecture', 'design']
     if '/testing/' in path:
@@ -154,11 +152,12 @@ def roles(path):
 
 
 def document_units(corpus, features, recon_meta, lock):
+    role_records = read_json(DATA / 'section-roles.json')['sections']
     tags = {}
     for feature in features:
         for path in feature['documents']:
             tags.setdefault('source/' + path, []).append(feature['id'])
-    units, omissions = [], []
+    units, omissions, classified = [], [], set()
     for path in sorted(corpus.rglob('*')):
         relative = path.relative_to(corpus).as_posix()
         if not path.is_file() or path.suffix.lower() not in ('.adoc', '.md') or relative.startswith('common/'):
@@ -174,12 +173,29 @@ def document_units(corpus, features, recon_meta, lock):
         for number, (start, end, heading) in enumerate(spans, 1):
             body = data[start:end]
             unit_id = 'D' + sha(relative.encode())[:12] + '-' + str(number).zfill(3)
+            role_record = role_records.get(unit_id)
+            if '/chapters/features/' in relative:
+                require(role_record is not None, f'Unclassified feature section: {unit_id}')
+                require(role_record['path'] == relative and role_record['sha256'] == sha(body),
+                        f'Role evidence changed: {unit_id}')
+                require(role_record['range_bytes'] == [start, end] and role_record['original_heading'] == heading,
+                        f'Role evidence location changed: {unit_id}')
+                require(role_record['information_roles'] == [item['role'] for item in role_record['evidence']],
+                        f'Role/evidence mismatch: {unit_id}')
+                require(all(item['anchor'] in body.decode('utf-8') for item in role_record['evidence']),
+                        f'Role evidence anchor absent: {unit_id}')
+                classified.add(unit_id)
+            information_roles = (role_record['information_roles'] if role_record else
+                                 meta.get('information_roles', roles(relative)))
+            feature_ids = sorted(meta.get('feature_ids', tags.get(relative, [])))
             units.append({
                 'id': unit_id, 'path': relative, 'range_bytes': [start, end],
                 'range_lines': [data[:start].count(b'\n') + 1, data[:end].count(b'\n') + (not data[:end].endswith(b'\n'))],
                 'sha256': sha(body), 'source_file_sha256': sha(data), 'original_heading': heading or path.name,
-                'feature_ids': sorted(meta.get('feature_ids', tags.get(relative, []))),
-                'information_roles': meta.get('information_roles', roles(relative)),
+                'feature_ids': feature_ids,
+                'selection_feature_ids': sorted(meta.get('selection_feature_ids', feature_ids)),
+                'information_roles': information_roles,
+                'information_role_evidence': role_record['evidence'] if role_record else [],
                 'representation': 'researcher-reconstruction' if reconstructed else ('original' if start == 0 and end == len(data) else 'verbatim-extract'),
                 'origin': {'repository': 'modernization-eval' if reconstructed else lock['repository'],
                            'commit': None if reconstructed else lock['commit'],
@@ -191,6 +207,7 @@ def document_units(corpus, features, recon_meta, lock):
                 'duplicate_group': sha(body), 'parent_document': relative,
                 'split_status': split_status,
             })
+    require(classified == set(role_records), 'Missing/unused feature role records')
     return units, omissions
 
 
@@ -234,7 +251,8 @@ def evidence_ledger(source, features, evidence):
 
 def ordered_units(units, task):
     def rank(unit):
-        tags = set(unit['feature_ids'])
+        # Broad capability membership is navigation metadata, not task relevance.
+        tags = set(unit['selection_feature_ids'])
         if tags.intersection(task['target_features']):
             return 0
         if tags.intersection(task['common_features']):
@@ -369,6 +387,8 @@ def check_seal(manifest):
     for key in ('source_inventory_sha256', 'semantic_corpus_sha256'):
         require(manifest[key] == seal[key], f'Sealed {key} changed')
     require(digest(manifest['selection_policy']) == seal['selection_policy_sha256'], 'Sealed policy changed')
+    require(digest(manifest['document_units']) == seal['document_units_sha256'], 'Sealed document metadata changed')
+    require(manifest['navigation_sha256'] == seal['navigation_sha256'], 'Sealed navigation changed')
     require(bool(manifest['selections']), 'No selections')
     for tid, selection in manifest['selections'].items():
         require(tid in seal['selections'], 'Unsealed task')
@@ -494,6 +514,33 @@ def fetch(output):
     return {'archive': str(output), 'sha256': sha(data)}
 
 
+def propose_seal(archive, output):
+    """Write a reviewable candidate; never replace the active selection seal."""
+    require(not output.exists(), 'Seal candidate output already exists')
+    policy = read_json(DATA / 'selection-policy.json')
+    lock = read_json(DATA / 'source.lock.json')
+    with tempfile.TemporaryDirectory(prefix='fineract-seal-') as temp:
+        corpus = Path(temp)
+        unpack(archive, corpus / 'source', lock)
+        shutil.copytree(DATA / 'reconstructed', corpus / 'reconstructed')
+        write(corpus / 'common/authority.md', (DATA / 'authority.md').read_bytes())
+        units, _ = document_units(corpus, read_json(DATA / 'features.json')['features'],
+                                  read_json(DATA / 'reconstructed.json'), lock)
+        seal = {'schema_version': 2, 'scope': 'Public-input revision 2; requires review before model admission.',
+                'selection_policy_sha256': digest(policy),
+                'source_inventory_sha256': lock['inventory_sha256'],
+                'semantic_corpus_sha256': digest(inventory(corpus)),
+                'document_units_sha256': digest(units), 'navigation_sha256': sha(navigation(units)),
+                'exposure': policy['exposure'], 'excluded': policy['excluded'], 'selections': {}}
+        for tid, task in policy['tasks'].items():
+            ordered = ordered_units(units, task)
+            seal['selections'][tid] = {
+                'ranked_units_sha256': digest([{'id': u['id'], 'rank': rank} for u, rank in ordered]),
+                'prefixes': dict(zip(('small', 'medium', 'large'), prefixes(ordered, policy['budgets_bytes'])))}
+        write_json(output, seal)
+    return {'candidate': str(output), 'sha256': sha(output.read_bytes()), 'active_seal_changed': False}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     subs = parser.add_subparsers(dest='command', required=True)
@@ -503,12 +550,17 @@ def main():
     p.add_argument('--tasks', type=Path, required=True)
     p.add_argument('--output', type=Path, required=True)
     p = subs.add_parser('verify'); p.add_argument('--bundle', type=Path, required=True)
+    p = subs.add_parser('propose-seal')
+    p.add_argument('--source-archive', type=Path, required=True)
+    p.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
     try:
         if args.command == 'fetch':
             result = fetch(args.output)
         elif args.command == 'generate':
             result = generate(args.source_archive, args.tasks, args.output)
+        elif args.command == 'propose-seal':
+            result = propose_seal(args.source_archive, args.output)
         else:
             result = verify(args.bundle)
     except (ValueError, KeyError, OSError, UnicodeError, tarfile.TarError) as exc:

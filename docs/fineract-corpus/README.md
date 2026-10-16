@@ -11,9 +11,11 @@
 - Apache Fineract 1.15.0、SHA `d5636847ac556c30b437254c353f05526d172b97`。
   原本は [SHA指定の公開archive](https://codeload.github.com/apache/fineract/tar.gz/d5636847ac556c30b437254c353f05526d172b97)。
   圧縮archiveと全ファイルのpath/bytes/hash/実行属性を固定して照合する。
-- 資料・tags・選択規則・実際の小中大集合は **`5f89a14`** の
-  [selection-seal.json](../../tools/fineract_corpus/selection-seal.json)で封印。
-  その後の検証強化は本文、順位、promptを変更していない。生成・検証の両方で封印を照合する。
+- 資料・tags・選択規則・実際の小中大集合は revision 2 の
+  [selection-seal.json](../../tools/fineract_corpus/selection-seal.json)で再封印。
+  旧 `5f89a14` 版からの変更、旧新版hash、独立性は [再封印記録](revision-2.md)を参照。
+  旧要求・seal・検証記録・集合表は [history/v1](history/v1/README.md)に保全した。
+  新版は Max 確認待ちであり、実モデル送信を承認するものではない。
 - 規模十分性の判断は [#36](https://github.com/fukuda-yuki/modernization-eval/issues/36)
   に記録された判断を実装上の前提とし、ここで別の研究設計判断へ置換しない。
 
@@ -22,7 +24,7 @@
 機能数・独立工程成果物数・独立標本数ではない。15の台帳分類は業務能力および
 業務を支える共通能力で、ファイル分割による水増しではない。
 
-[機能対応・不足台帳](feature-ledger.md)と [27件の本文確認根拠](../../tools/fineract_corpus/evidence.json)
+[機能対応・不足台帳](feature-ledger.md)と [28件の本文確認根拠](../../tools/fineract_corpus/evidence.json)
 で、原資料、代表的コード、公開テストを追跡する。台帳の「本文確認」「ファイル名のみ」
 「未確認」を混同しない。元のtesting indexはTBDで、全機能に完全なPT/ST原本があるとは
 主張しない。公開テストは存在と意味対応を静的に確認した範囲のみで、未実行。
@@ -40,7 +42,7 @@
 量比較は索引ありの5条件、案内比較は自律探索/中量×原配置/全体索引の2×2。
 中量は結果によらず代表用量。2種類の索引を区別する。
 
-- **全体索引**: 158,136 UTF-8 bytes。機能・情報役割をキーに原見出しと参照を並べ、
+- **全体索引**: 97,308 UTF-8 bytes。機能・情報役割をキーに原見出しと参照を並べ、
   indexedのworkspaceだけに配置。promptには所在を示し、全索引を自動preloadしない。
   codeやテストのパスは原配置を保つ。概要・正解説明は索引へ追加しない。
 - **選択索引**: 当該課題のlargeまでの同一見出し・参照集合。
@@ -54,11 +56,17 @@
 本文は8/32/128 KiB以内のprefixで、次の節が入らなければ停止し、理由をmanifestに残す。
 文書節を飛ばしたり切り詰めたりしない。小中大が厳密に増えなければ生成自体を失敗させる。
 
-選択順位は事前固定の対象機能tags→公開要求の共通契約tags→path/byte順。
-タグは公開見出しと業務対応に基づき、gold変更位置を使わない。複数機能にまたがる
-後追い資料もあるため、貯蓄と手数料のsmallは同じ資料となる。これは固定規則からの
-結果であり、成果物の成功に合わせて個別に調整しない。情報役割は章・資料用途の分類で、
-すべての段落がその役割を満たすという品質判定ではない。
+選択順位は事前固定の主題tags→公開要求の共通契約tags→path/byte順。
+広い機能所属 `feature_ids` は索引用、主題 `selection_feature_ids` は関連性・選択用に
+分ける。手数料表の savings 所属は利息計算への直接関連を意味しないため、Savings 課題では
+rest とする。一般業務概要は rest、横断試験・業務日説明は共通契約として扱う。
+Savings small の6,607 bytesは貯蓄詳細6,579 bytesと元文書タイトル28 bytesであり、
+次のOverview節が収まらないため停止する。本文予算に合わせた節の飛ばし読みは行わない。
+
+[feature全275節の役割表](section-roles.md)は、章名の一律3分類から本文根拠のある
+16役割へ改めた。API、検証、会計、データ構造、計算規則、業務例、設定などを区別し、
+複数役割の節も明示する。節の主用途の分類であり、全段落の網羅的注釈や試験実行の証明ではない。
+最終公開要求には業務要求だけを残し、探索先や研究者への指示は含めない。
 
 関連性・網羅性・重複も量とともに変わる。純粋な長さ効果や散在全般の効果とは呼ばず、
 この選択規則による初回量と、全体索引という案内施策の比較として扱う。
@@ -93,7 +101,7 @@ FINERACT_SOURCE_ARCHIVE=/tmp/fineract-source.tar.gz \
   python -m unittest discover -s tests/fineract_corpus -v
 ```
 
-検証環境はLinux/POSIXのCPython 3.12。原本の実行属性も固定するため、
+検証環境はLinux/POSIX（今回のPython版はvalidation.json、CIはCPython 3.12）。原本の実行属性も固定するため、
 WindowsではLinux container/WSLのfilesystemを使用する。native Windows生成は未検証。
 生成はoffline、Python標準ライブラリのみ。既存outputを上書きしない。
 テストは別ディレクトリへ2回生成し、manifest/promptを含む全ファイルのbyte同一性を確認する。

@@ -1,329 +1,341 @@
 {
-  "schema_version": 1,
   "evidence": [
     {
+      "anchor": "There is no support of COB",
+      "claim": "Opening is a historical design-state claim, contradicted as current inventory by the pinned API and public BDD.",
+      "confirmation": "本文確認",
       "id": "BD-DOC",
-      "path": "fineract-doc/src/docs/en/chapters/architecture/business-date.adoc",
       "lines": [
         1,
         63
       ],
-      "anchor": "There is no support of COB",
-      "confirmation": "本文確認",
-      "claim": "Opening is a historical design-state claim, contradicted as current inventory by the pinned API and public BDD.",
+      "path": "fineract-doc/src/docs/en/chapters/architecture/business-date.adoc",
       "source_sha256": "56fd3a9ec7e5e01e8b92cf89be065252a2ffe768f7350ada55a12680d71e318f"
     },
     {
+      "anchor": "/v1/businessdate",
+      "claim": "Business date GET and POST exist; update is dispatched through a command.",
+      "confirmation": "本文確認",
       "id": "BD-API",
-      "path": "fineract-core/src/main/java/org/apache/fineract/infrastructure/businessdate/api/BusinessDateApiResource.java",
       "lines": [
         45,
         84
       ],
-      "anchor": "/v1/businessdate",
-      "confirmation": "本文確認",
-      "claim": "Business date GET and POST exist; update is dispatched through a command.",
+      "path": "fineract-core/src/main/java/org/apache/fineract/infrastructure/businessdate/api/BusinessDateApiResource.java",
       "source_sha256": "ecad7459be7d5a1b60bbbdcb538019ee1526eb14d2deb350cb0169725f2e6355"
     },
     {
+      "anchor": "Feature:",
+      "claim": "Public BDD business-date scenarios exist; execution not performed.",
+      "confirmation": "本文確認",
       "id": "BD-TEST",
-      "path": "fineract-e2e-tests-runner/src/test/resources/features/BusinessDate.feature",
       "lines": [
         1,
         49
       ],
-      "anchor": "Feature:",
-      "confirmation": "本文確認",
-      "claim": "Public BDD business-date scenarios exist; execution not performed.",
+      "path": "fineract-e2e-tests-runner/src/test/resources/features/BusinessDate.feature",
       "source_sha256": "3da5d85658436d2455df6b3a2dd9b587df8e480225a921682cd92eaeeff91e21"
     },
     {
+      "anchor": "January 2nd - January 14th",
+      "claim": "Document mixes inclusive resume end description and preceding-day example; do not resolve from prose alone.",
+      "confirmation": "本文確認",
       "id": "PAUSE-DOC",
-      "path": "fineract-doc/src/docs/en/chapters/features/pause-delinquency.adoc",
       "lines": [
         1,
         450
       ],
-      "anchor": "January 2nd - January 14th",
-      "confirmation": "本文確認",
-      "claim": "Document mixes inclusive resume end description and preceding-day example; do not resolve from prose alone.",
+      "path": "fineract-doc/src/docs/en/chapters/features/pause-delinquency.adoc",
       "source_sha256": "ef281250499cc61f01fde93d241979eb9d6b7e25ce57583c3e33bc50244ab9f8"
     },
     {
+      "anchor": "setEndDate(r.getStartDate())",
+      "claim": "Baseline effective end is resume start; range helpers use date differences and explicit overlap boundaries.",
+      "confirmation": "本文確認",
       "id": "PAUSE-HELPER",
-      "path": "fineract-loan/src/main/java/org/apache/fineract/portfolio/delinquency/helper/DelinquencyEffectivePauseHelperImpl.java",
       "lines": [
         38,
         100
       ],
-      "anchor": "setEndDate(r.getStartDate())",
-      "confirmation": "本文確認",
-      "claim": "Baseline effective end is resume start; range helpers use date differences and explicit overlap boundaries.",
+      "path": "fineract-loan/src/main/java/org/apache/fineract/portfolio/delinquency/helper/DelinquencyEffectivePauseHelperImpl.java",
       "source_sha256": "7aa31bc9f027ad1a24b7ecf02b12ce57f9bbf772246ad1a67d488961154f6002"
     },
     {
+      "anchor": "\"14 January 2023\", true",
+      "claim": "Public API integration preserves PAUSE and RESUME records and expects pause active on resume day.",
+      "confirmation": "本文確認",
       "id": "PAUSE-TEST",
-      "path": "integration-tests/src/test/java/org/apache/fineract/integrationtests/DelinquencyActionIntegrationTests.java",
       "lines": [
         135,
         210
       ],
-      "anchor": "\"14 January 2023\", true",
-      "confirmation": "本文確認",
-      "claim": "Public API integration preserves PAUSE and RESUME records and expects pause active on resume day.",
+      "path": "integration-tests/src/test/java/org/apache/fineract/integrationtests/DelinquencyActionIntegrationTests.java",
       "source_sha256": "c2c54825f4b8ca144d4bb43e22ce8b41f9e07def96ef9de6434027a19ec2b933"
     },
     {
+      "anchor": "validateResume",
+      "claim": "Validator inspects effective intervals, loan state and business date; source, not a new task patch.",
+      "confirmation": "本文確認",
       "id": "PAUSE-VALIDATION",
-      "path": "fineract-loan/src/main/java/org/apache/fineract/portfolio/delinquency/validator/DelinquencyActionParseAndValidator.java",
       "lines": [
         41,
         257
       ],
-      "anchor": "validateResume",
-      "confirmation": "本文確認",
-      "claim": "Validator inspects effective intervals, loan state and business date; source, not a new task patch.",
+      "path": "fineract-loan/src/main/java/org/apache/fineract/portfolio/delinquency/validator/DelinquencyActionParseAndValidator.java",
       "source_sha256": "ecfb3d4dedf129ad8a012e1b59e72b04a70ac8fa5c417c8fe950c138018dfc41"
     },
     {
+      "anchor": "Anniversary",
+      "claim": "Posting types, anchor, financial-year separation and manual posting are documented.",
+      "confirmation": "本文確認",
       "id": "SAVINGS-DOC",
-      "path": "fineract-doc/src/docs/en/chapters/features/savings-interest-posting.adoc",
       "lines": [
         1,
         113
       ],
-      "anchor": "Anniversary",
-      "confirmation": "本文確認",
-      "claim": "Posting types, anchor, financial-year separation and manual posting are documented.",
+      "path": "fineract-doc/src/docs/en/chapters/features/savings-interest-posting.adoc",
       "source_sha256": "f3dc87b4ccf322aaf1e8cca81accf783c2186cb2cf14a4648f1ba965839130fd"
     },
     {
+      "anchor": "Math.min(anniversaryDay, date.lengthOfMonth())",
+      "claim": "Baseline keeps initial numeric day and clamps in short months; manual posting can split periods.",
+      "confirmation": "本文確認",
       "id": "SAVINGS-HELPER",
-      "path": "fineract-core/src/main/java/org/apache/fineract/portfolio/savings/domain/SavingsHelper.java",
       "lines": [
         50,
         197
       ],
-      "anchor": "Math.min(anniversaryDay, date.lengthOfMonth())",
-      "confirmation": "本文確認",
-      "claim": "Baseline keeps initial numeric day and clamps in short months; manual posting can split periods.",
+      "path": "fineract-core/src/main/java/org/apache/fineract/portfolio/savings/domain/SavingsHelper.java",
       "source_sha256": "b254db3e371b2f3a3860a7f0dfac41340b04040063c3d123e23a3d68fd035cef"
     },
     {
+      "anchor": "anniversaryAnnual_accountOpenedOnFeb29",
+      "claim": "JUnit specifies aligned and short-month periods, not full API or DB coverage.",
+      "confirmation": "本文確認",
       "id": "SAVINGS-TEST",
-      "path": "fineract-core/src/test/java/org/apache/fineract/portfolio/savings/domain/SavingsHelperAnniversaryPostingTest.java",
       "lines": [
         36,
         202
       ],
-      "anchor": "anniversaryAnnual_accountOpenedOnFeb29",
-      "confirmation": "本文確認",
-      "claim": "JUnit specifies aligned and short-month periods, not full API or DB coverage.",
+      "path": "fineract-core/src/test/java/org/apache/fineract/portfolio/savings/domain/SavingsHelperAnniversaryPostingTest.java",
       "source_sha256": "5015ffc52e95166cf7be1260116c723fb9456edf7b9f9fd0a5e70645a6a25cf6"
     },
     {
+      "anchor": "anniversaryPostingType_withAnyCompounding",
+      "claim": "Parameterized savings validation recognizes anniversary types.",
+      "confirmation": "本文確認",
       "id": "SAVINGS-VALIDATION",
-      "path": "fineract-savings/src/test/java/org/apache/fineract/portfolio/savings/domain/SavingsAccountAnniversaryValidationTest.java",
       "lines": [
         45,
         83
       ],
-      "anchor": "anniversaryPostingType_withAnyCompounding",
-      "confirmation": "本文確認",
-      "claim": "Parameterized savings validation recognizes anniversary types.",
+      "path": "fineract-savings/src/test/java/org/apache/fineract/portfolio/savings/domain/SavingsAccountAnniversaryValidationTest.java",
       "source_sha256": "9dad17ae7b71d90de32775a968faae931fd874ee6940b5747f1747e63b953574"
     },
     {
+      "anchor": "compoundingLongerThanPosting",
+      "claim": "Fixed-deposit validation distinguishes valid compounding and longer-than-posting errors.",
+      "confirmation": "本文確認",
       "id": "FIXED-VALIDATION",
-      "path": "fineract-savings/src/test/java/org/apache/fineract/portfolio/savings/domain/FixedDepositProductAnniversaryValidationTest.java",
       "lines": [
         45,
         88
       ],
-      "anchor": "compoundingLongerThanPosting",
-      "confirmation": "本文確認",
-      "claim": "Fixed-deposit validation distinguishes valid compounding and longer-than-posting errors.",
+      "path": "fineract-savings/src/test/java/org/apache/fineract/portfolio/savings/domain/FixedDepositProductAnniversaryValidationTest.java",
       "source_sha256": "7b15a694625c521b8bd8b30e50a1d032cd9c2ad76b85547eac6ba7d8df07f516"
     },
     {
+      "anchor": "Working Capital Loan",
+      "claim": "Documented hierarchical template filtering is WCP-specific.",
+      "confirmation": "本文確認",
       "id": "CHARGE-DOC",
-      "path": "fineract-doc/src/docs/en/chapters/features/charges-template-filters.adoc",
       "lines": [
         1,
         51
       ],
-      "anchor": "Working Capital Loan",
-      "confirmation": "本文確認",
-      "claim": "Documented hierarchical template filtering is WCP-specific.",
+      "path": "fineract-doc/src/docs/en/chapters/features/charges-template-filters.adoc",
       "source_sha256": "376474c8697fdaced4528f779acf263d8b51f94debd8c351c3cb304a20c1f8ba"
     },
     {
+      "anchor": "validateHasReadPermission",
+      "claim": "Template API is GET, checks READ permission and delegates query parameters.",
+      "confirmation": "本文確認",
       "id": "CHARGE-API",
-      "path": "fineract-charge/src/main/java/org/apache/fineract/portfolio/charge/api/ChargesApiResource.java",
       "lines": [
         113,
         135
       ],
-      "anchor": "validateHasReadPermission",
-      "confirmation": "本文確認",
-      "claim": "Template API is GET, checks READ permission and delegates query parameters.",
+      "path": "fineract-charge/src/main/java/org/apache/fineract/portfolio/charge/api/ChargesApiResource.java",
       "source_sha256": "ed6516cdcd427955c4225422259ef7f2a50cbf5a549afd7fb4b22102a90fcec7"
     },
     {
+      "anchor": "return retrieveNewChargeDetails();",
+      "claim": "WCP branch returns filtered template; other inputs fall back to unfiltered fields with currency, account and tax metadata.",
+      "confirmation": "本文確認",
       "id": "CHARGE-SERVICE",
-      "path": "fineract-provider/src/main/java/org/apache/fineract/portfolio/charge/service/ChargeReadPlatformServiceImpl.java",
       "lines": [
         117,
         178
       ],
-      "anchor": "return retrieveNewChargeDetails();",
-      "confirmation": "本文確認",
-      "claim": "WCP branch returns filtered template; other inputs fall back to unfiltered fields with currency, account and tax metadata.",
+      "path": "fineract-provider/src/main/java/org/apache/fineract/portfolio/charge/service/ChargeReadPlatformServiceImpl.java",
       "source_sha256": "b01db5307e3c486c954348449b52e8d819afa9e2d176c619391c6ad1b72849a7"
     },
     {
+      "anchor": "retrieveSavingsCollectionTimeTypes",
+      "claim": "Loan and savings specialized option sets are already available; savings closure is commented out of the template set.",
+      "confirmation": "本文確認",
       "id": "CHARGE-OPTIONS",
-      "path": "fineract-charge/src/main/java/org/apache/fineract/portfolio/charge/service/ChargeDropdownReadPlatformServiceImpl.java",
       "lines": [
         75,
         157
       ],
-      "anchor": "retrieveSavingsCollectionTimeTypes",
-      "confirmation": "本文確認",
-      "claim": "Loan and savings specialized option sets are already available; savings closure is commented out of the template set.",
+      "path": "fineract-charge/src/main/java/org/apache/fineract/portfolio/charge/service/ChargeDropdownReadPlatformServiceImpl.java",
       "source_sha256": "f952f30399cbe105ca7567f4c6698cac607bd468edae84edb54a79d74b538230"
     },
     {
+      "anchor": "SAVINGS_NOACTIVITY_FEE(16",
+      "claim": "Numeric time enum identifiers; do not equate every enum value with template eligibility.",
+      "confirmation": "本文確認",
       "id": "CHARGE-TIME",
-      "path": "fineract-core/src/main/java/org/apache/fineract/portfolio/charge/domain/ChargeTimeType.java",
       "lines": [
         23,
         43
       ],
-      "anchor": "SAVINGS_NOACTIVITY_FEE(16",
-      "confirmation": "本文確認",
-      "claim": "Numeric time enum identifiers; do not equate every enum value with template eligibility.",
+      "path": "fineract-core/src/main/java/org/apache/fineract/portfolio/charge/domain/ChargeTimeType.java",
       "source_sha256": "8f001e3307d9a1162ffaad95fc9feae302afd555809486d4210296b6f07d3b13"
     },
     {
+      "anchor": "PERCENT_OF_DISBURSEMENT_AMOUNT(5",
+      "claim": "Calculation identifiers and WCP flat-only sets.",
+      "confirmation": "本文確認",
       "id": "CHARGE-CALC",
-      "path": "fineract-charge/src/main/java/org/apache/fineract/portfolio/charge/domain/ChargeCalculationType.java",
       "lines": [
         23,
         45
       ],
-      "anchor": "PERCENT_OF_DISBURSEMENT_AMOUNT(5",
-      "confirmation": "本文確認",
-      "claim": "Calculation identifiers and WCP flat-only sets.",
+      "path": "fineract-charge/src/main/java/org/apache/fineract/portfolio/charge/domain/ChargeCalculationType.java",
       "source_sha256": "bde72ee6736f5b7425bcf71f5d76162545c681bf09e12da236844e32aa5a68ec"
     },
     {
+      "anchor": "WORKING_CAPITAL_LOAN(5",
+      "claim": "Loan=1, savings=2, WCP=5 are existing enum values.",
+      "confirmation": "本文確認",
       "id": "CHARGE-APPLIES",
-      "path": "fineract-charge/src/main/java/org/apache/fineract/portfolio/charge/domain/ChargeAppliesTo.java",
       "lines": [
         21,
         30
       ],
-      "anchor": "WORKING_CAPITAL_LOAN(5",
-      "confirmation": "本文確認",
-      "claim": "Loan=1, savings=2, WCP=5 are existing enum values.",
+      "path": "fineract-charge/src/main/java/org/apache/fineract/portfolio/charge/domain/ChargeAppliesTo.java",
       "source_sha256": "f4ad70351a5239347c7ff631ef40f147fef99b2d824aa84ae0a028274168110e"
     },
     {
+      "anchor": "Create a Client",
+      "claim": "API operation body/annotations establish this business entry point; not execution evidence.",
+      "confirmation": "本文確認",
       "id": "CUSTOMER-API",
-      "path": "fineract-provider/src/main/java/org/apache/fineract/portfolio/client/api/ClientsApiResource.java",
       "lines": [
         134,
         196
       ],
-      "anchor": "Create a Client",
-      "confirmation": "本文確認",
-      "claim": "API operation body/annotations establish this business entry point; not execution evidence.",
+      "path": "fineract-provider/src/main/java/org/apache/fineract/portfolio/client/api/ClientsApiResource.java",
       "source_sha256": "bafb9aa41b86a4bf2cfffa7b4b5676d4b016cc2e460f7d520ddc0571f54bab7a"
     },
     {
+      "anchor": "List Groups",
+      "claim": "API operation body/annotations establish this business entry point; not execution evidence.",
+      "confirmation": "本文確認",
       "id": "GROUP-API",
-      "path": "fineract-provider/src/main/java/org/apache/fineract/portfolio/group/api/GroupsApiResource.java",
       "lines": [
         181,
         240
       ],
-      "anchor": "List Groups",
-      "confirmation": "本文確認",
-      "claim": "API operation body/annotations establish this business entry point; not execution evidence.",
+      "path": "fineract-provider/src/main/java/org/apache/fineract/portfolio/group/api/GroupsApiResource.java",
       "source_sha256": "67dfb7a05e5eaae2ffd5cc810ad2bd39564ff4cfd968046bfd45f45767bcbef0"
     },
     {
+      "anchor": "Create new Transfer",
+      "claim": "API operation body/annotations establish this business entry point; not execution evidence.",
+      "confirmation": "本文確認",
       "id": "TRANSFER-API",
-      "path": "fineract-provider/src/main/java/org/apache/fineract/portfolio/account/api/AccountTransfersApiResource.java",
       "lines": [
         65,
         133
       ],
-      "anchor": "Create new Transfer",
-      "confirmation": "本文確認",
-      "claim": "API operation body/annotations establish this business entry point; not execution evidence.",
+      "path": "fineract-provider/src/main/java/org/apache/fineract/portfolio/account/api/AccountTransfersApiResource.java",
       "source_sha256": "268042f4693a7ea47e2fee48162beecd37ee6380a6f6e04443223e0f4ec42798"
     },
     {
+      "anchor": "Balanced",
+      "claim": "API operation body/annotations establish this business entry point; not execution evidence.",
+      "confirmation": "本文確認",
       "id": "ACCOUNTING-API",
-      "path": "fineract-provider/src/main/java/org/apache/fineract/accounting/journalentry/api/JournalEntriesApiResource.java",
       "lines": [
         170,
         222
       ],
-      "anchor": "Balanced",
-      "confirmation": "本文確認",
-      "claim": "API operation body/annotations establish this business entry point; not execution evidence.",
+      "path": "fineract-provider/src/main/java/org/apache/fineract/accounting/journalentry/api/JournalEntriesApiResource.java",
       "source_sha256": "9a4859f9766ab00f8c87dbc9f31ed27e247dc8ec2f0f03e0ff43b17db313e44e"
     },
     {
+      "anchor": "Submit new fixed deposit",
+      "claim": "API operation body/annotations establish this business entry point; not execution evidence.",
+      "confirmation": "本文確認",
       "id": "FIXED-API",
-      "path": "fineract-provider/src/main/java/org/apache/fineract/portfolio/savings/api/FixedDepositAccountsApiResource.java",
       "lines": [
         145,
         205
       ],
-      "anchor": "Submit new fixed deposit",
-      "confirmation": "本文確認",
-      "claim": "API operation body/annotations establish this business entry point; not execution evidence.",
+      "path": "fineract-provider/src/main/java/org/apache/fineract/portfolio/savings/api/FixedDepositAccountsApiResource.java",
       "source_sha256": "b0209c514e98687905f92674c9c1a1986fb519c52079d46218c49d15fa6305c9"
     },
     {
+      "anchor": "Submit new recurring",
+      "claim": "API operation body/annotations establish this business entry point; not execution evidence.",
+      "confirmation": "本文確認",
       "id": "RECURRING-API",
-      "path": "fineract-provider/src/main/java/org/apache/fineract/portfolio/savings/api/RecurringDepositAccountsApiResource.java",
       "lines": [
         132,
         184
       ],
-      "anchor": "Submit new recurring",
-      "confirmation": "本文確認",
-      "claim": "API operation body/annotations establish this business entry point; not execution evidence.",
+      "path": "fineract-provider/src/main/java/org/apache/fineract/portfolio/savings/api/RecurringDepositAccountsApiResource.java",
       "source_sha256": "ea9cafc17b4aaeac2e65e663828a6d1b1def6b8fed1b5d3b699d70c0512f2603"
     },
     {
+      "anchor": "Create an Office",
+      "claim": "API operation body/annotations establish this business entry point; not execution evidence.",
+      "confirmation": "本文確認",
       "id": "OFFICE-API",
-      "path": "fineract-provider/src/main/java/org/apache/fineract/organisation/office/api/OfficesApiResource.java",
       "lines": [
         100,
         150
       ],
-      "anchor": "Create an Office",
-      "confirmation": "本文確認",
-      "claim": "API operation body/annotations establish this business entry point; not execution evidence.",
+      "path": "fineract-provider/src/main/java/org/apache/fineract/organisation/office/api/OfficesApiResource.java",
       "source_sha256": "63b27428a728048e1f9b26a461be7e349de28633cdb0224eae1b2362cacdc90a"
     },
     {
+      "anchor": "Create a New Role",
+      "claim": "API operation body/annotations establish this business entry point; not execution evidence.",
+      "confirmation": "本文確認",
       "id": "ROLE-API",
-      "path": "fineract-provider/src/main/java/org/apache/fineract/useradministration/api/RolesApiResource.java",
       "lines": [
         100,
         134
       ],
-      "anchor": "Create a New Role",
-      "confirmation": "本文確認",
-      "claim": "API operation body/annotations establish this business entry point; not execution evidence.",
+      "path": "fineract-provider/src/main/java/org/apache/fineract/useradministration/api/RolesApiResource.java",
       "source_sha256": "56590968881c1444d6877fd0182474fb56af99ca0aeafddc66ff4f65c92fc106"
+    },
+    {
+      "anchor": "testSavingsDailyInterestPosting",
+      "claim": "Daily-type API deposit/post/retrieve asserts amount and dates; not anniversary coverage or execution evidence.",
+      "confirmation": "本文確認",
+      "id": "SAVINGS-INTEGRATION",
+      "lines": [
+        69,
+        135
+      ],
+      "path": "integration-tests/src/test/java/org/apache/fineract/integrationtests/SavingsInterestPostingIntegrationTest.java",
+      "source_sha256": "d98d5bf8f366dbebcab748579a3e3fd01a1ad986370005b63b489569a5970e13"
     }
-  ]
+  ],
+  "schema_version": 1
 }

@@ -1,11 +1,9 @@
 # 手数料テンプレートの対象別絞込みを貸付・貯蓄へ拡張
 
-ID案: `FINERACT-CHARGE-TEMPLATE`。
+要求ID: `FINERACT-CHARGE-TEMPLATE`。
 
 baselineのGET /charges/templateの階層filterはworking-capital-loanに分岐し、それ以外は無filterへ戻る。新要求は既存の数値enum LOAN/SAVINGSでも第1階層のfilterを有効にすること。
 
 LOAN/SAVINGSを指定した応答の汎用time/calculation optionsは、それぞれ無filter応答の既存loan/savings専用optionsと同じ許容集合にする。通貨・適用可能な会計/税等のmetadataは失わない。無filterは従来の意味と項目を保つ。既存WCPの2階層filterは保持する。
 
-chargeTimeTypeだけの指定、未知chargeAppliesTo、整数範囲を越えるenum値はHTTP400の公開検証エラーにする。今回の拡張ではLOAN/SAVINGSへのchargeTimeType指定は未対応としてHTTP400にする（無視やWCP規則の流用をしない）。認証・READ権限、照会の非更新性を保つ。順序や例外文言の完全一致など公開要求のない条件を採点しない。
-
-公開資料はcharges-template-filters、loan-charges、WCP charges、既存API互換/検証規約、後追いのloan/savings許容値対応表。後追い表はbaselineの公的API/enum/検証規則から作り、gold patchやhidden caseから作らない。
+chargeTimeTypeだけの指定、未知chargeAppliesTo、整数範囲を越えるenum値はHTTP400の公開検証エラーにする。今回の拡張ではLOAN/SAVINGSへのchargeTimeType指定は未対応としてHTTP400にする（無視やWCP規則の流用をしない）。認証・READ権限、照会の非更新性を保つ。応答optionsの順序と例外文言の完全一致は要求の対象外とする。

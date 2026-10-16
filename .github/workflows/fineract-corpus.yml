@@ -7,7 +7,7 @@ on:
       - 'docs/fineract-corpus/**'
       - '.github/workflows/fineract-corpus.yml'
   push:
-    branches: ['codex/issue-36-fineract-corpus']
+    branches: ['codex/issue-36-fineract-corpus', 'codex/fineract-runtime-acceptance']
 permissions:
   contents: read
 jobs:

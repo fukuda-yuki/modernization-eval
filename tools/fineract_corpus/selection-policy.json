@@ -1,10 +1,8 @@
 {
-  "schema_version": 1,
-  "selection_frozen_at": "2026-10-16T18:10:00Z",
-  "selection_time_basis": "Implementation-session UTC; ordering frozen before generation and before any model outcome. Not a source-document creation time.",
-  "exposure": [
-    "Issue #36 and #37 public bodies",
-    "pinned baseline documentation, source, public tests"
+  "budgets_bytes": [
+    8192,
+    32768,
+    131072
   ],
   "excluded": [
     "gold patches",
@@ -12,42 +10,45 @@
     "hidden expectations",
     "successful task runs"
   ],
-  "rule": "Rank document units by target feature tag, then public-request common-contract tag, then fixed corpus path and byte start. Tags come from curated public headings/capabilities, not change-file locations. Stop at first whole unit exceeding budget; never skip or truncate.",
-  "budgets_bytes": [
-    8192,
-    32768,
-    131072
+  "exposure": [
+    "Issue #36 and #37 public bodies",
+    "pinned baseline documentation, source, public tests"
   ],
+  "revision": 2,
+  "rule": "Rank by primary-subject selection_feature_ids intersecting target_features, then common_features, then fixed corpus path and byte start. Broad feature_ids include dependencies and are for navigation only. Source chapter tags identify their subject; researcher reconstructions explicitly distinguish primary subject from shared capabilities. Stop at the first whole unit exceeding budget; never skip or truncate.",
+  "schema_version": 1,
+  "selection_frozen_at": "2026-10-16T18:37:52Z",
+  "selection_time_basis": "Public-only independent reseal after review of v1 metadata; no gold patch, private draft, hidden expectation or model outcome accessed. Frozen before candidate generation.",
   "tasks": {
-    "FINERACT-DELINQUENCY-RESUME": {
-      "target_features": [
-        "loan-delinquency"
-      ],
-      "common_features": [
-        "business-date-cob",
-        "events",
-        "persistence"
-      ]
-    },
-    "FINERACT-SAVINGS-MONTH-END": {
-      "target_features": [
-        "savings-deposits"
-      ],
-      "common_features": [
-        "business-date-cob",
-        "accounting",
-        "api-contract"
-      ]
-    },
     "FINERACT-CHARGE-TEMPLATE": {
-      "target_features": [
-        "charges"
-      ],
       "common_features": [
         "working-capital",
         "api-contract",
         "organization-access",
         "accounting"
+      ],
+      "target_features": [
+        "charges"
+      ]
+    },
+    "FINERACT-DELINQUENCY-RESUME": {
+      "common_features": [
+        "business-date-cob",
+        "events",
+        "persistence"
+      ],
+      "target_features": [
+        "loan-delinquency"
+      ]
+    },
+    "FINERACT-SAVINGS-MONTH-END": {
+      "common_features": [
+        "business-date-cob",
+        "accounting",
+        "api-contract"
+      ],
+      "target_features": [
+        "savings-deposits"
       ]
     }
   }
