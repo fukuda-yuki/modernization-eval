@@ -1,0 +1,134 @@
+{
+  "charges-detail.md": {
+    "evidence_ids": [
+      "CHARGE-DOC",
+      "CHARGE-API",
+      "CHARGE-SERVICE",
+      "CHARGE-OPTIONS",
+      "CHARGE-TIME",
+      "CHARGE-CALC",
+      "CHARGE-APPLIES"
+    ],
+    "feature_ids": [
+      "charges",
+      "savings-deposits",
+      "loan-lifecycle",
+      "working-capital",
+      "organization-access",
+      "accounting"
+    ],
+    "information_roles": [
+      "specification",
+      "design",
+      "public-test-guidance"
+    ],
+    "selection_basis": "Primary subject of this document, distinct from broad capability/dependency membership. Shared overview is rest; shared verification/date discipline is a common contract.",
+    "selection_feature_ids": [
+      "charges"
+    ]
+  },
+  "delinquency-detail.md": {
+    "evidence_ids": [
+      "PAUSE-DOC",
+      "PAUSE-HELPER",
+      "PAUSE-VALIDATION",
+      "PAUSE-TEST",
+      "BD-API"
+    ],
+    "feature_ids": [
+      "loan-delinquency",
+      "business-date-cob",
+      "events",
+      "persistence"
+    ],
+    "information_roles": [
+      "specification",
+      "design",
+      "public-test-guidance"
+    ],
+    "selection_basis": "Primary subject of this document, distinct from broad capability/dependency membership. Shared overview is rest; shared verification/date discipline is a common contract.",
+    "selection_feature_ids": [
+      "loan-delinquency"
+    ]
+  },
+  "process-checklist.md": {
+    "evidence_ids": [
+      "BD-DOC",
+      "BD-API",
+      "BD-TEST",
+      "PAUSE-TEST",
+      "SAVINGS-TEST",
+      "CHARGE-API"
+    ],
+    "feature_ids": [
+      "loan-delinquency",
+      "savings-deposits",
+      "charges",
+      "business-date-cob",
+      "accounting",
+      "persistence"
+    ],
+    "information_roles": [
+      "public-test-guidance",
+      "process-checklist"
+    ],
+    "selection_basis": "Primary subject of this document, distinct from broad capability/dependency membership. Shared overview is rest; shared verification/date discipline is a common contract.",
+    "selection_feature_ids": [
+      "business-date-cob",
+      "persistence"
+    ]
+  },
+  "savings-detail.md": {
+    "evidence_ids": [
+      "SAVINGS-DOC",
+      "SAVINGS-HELPER",
+      "SAVINGS-TEST",
+      "SAVINGS-VALIDATION",
+      "FIXED-VALIDATION",
+      "FIXED-API",
+      "SAVINGS-INTEGRATION"
+    ],
+    "feature_ids": [
+      "savings-deposits",
+      "business-date-cob",
+      "accounting"
+    ],
+    "information_roles": [
+      "specification",
+      "design",
+      "public-test-guidance"
+    ],
+    "selection_basis": "Primary subject of this document, distinct from broad capability/dependency membership. Shared overview is rest; shared verification/date discipline is a common contract.",
+    "selection_feature_ids": [
+      "savings-deposits"
+    ]
+  },
+  "system-overview.md": {
+    "evidence_ids": [
+      "CUSTOMER-API",
+      "GROUP-API",
+      "FIXED-API",
+      "RECURRING-API",
+      "TRANSFER-API",
+      "ACCOUNTING-API",
+      "OFFICE-API",
+      "ROLE-API",
+      "BD-API"
+    ],
+    "feature_ids": [
+      "customers-groups",
+      "loan-lifecycle",
+      "savings-deposits",
+      "transfers",
+      "accounting",
+      "organization-access",
+      "business-date-cob"
+    ],
+    "information_roles": [
+      "business-overview",
+      "architecture"
+    ],
+    "selection_basis": "Primary subject of this document, distinct from broad capability/dependency membership. Shared overview is rest; shared verification/date discipline is a common contract.",
+    "selection_feature_ids": []
+  }
+}

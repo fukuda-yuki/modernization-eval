@@ -1,0 +1,36 @@
+// Common runtime dependency: only the pinned public SDK is substituted.
+// Production modules and every test task keep their normal compilation/execution.
+gradle.projectsEvaluated {
+    def sdk = new File('/state/public-sdk')
+    if (!new File(sdk, 'inventory.json').isFile()) return
+    def inventory = new groovy.json.JsonSlurper().parse(new File(sdk, 'inventory.json'))
+    inventory.each { name, entry ->
+        def file = new File(sdk, name)
+        if (!file.isFile() || file.length() != entry.bytes ||
+            java.security.MessageDigest.getInstance('SHA-256').digest(file.bytes).encodeHex().toString() != entry.sha256)
+            throw new GradleException('Prepared public SDK content changed: ' + name)
+    }
+    [':fineract-client': sdk, ':fineract-client-feign': new File(sdk, 'feign')].each { module, directory ->
+    def client = gradle.rootProject.findProject(module)
+    if (client == null) return // Nested buildSrc has no application client projects.
+    if (!new File(directory, 'client.jar').isFile()) throw new GradleException('Prepared public SDK missing: ' + module)
+    client.sourceSets.main.output.classesDirs.setFrom(client.files(new File(directory, 'classes')))
+    client.sourceSets.main.output.resourcesDir = new File(directory, 'resources')
+    ['compileJava','processResources','classes','buildJavaSdk','buildTypescriptAngularSdk',
+     'buildTypescriptFetchSdk','buildAsciidoc','cleanupGeneratedJavaFiles','licenseFormatMain',
+     'spotlessMiscApply'].each { name ->
+        client.tasks.matching { it.name == name }.configureEach {
+            setDependsOn([])
+            setFinalizedBy([])
+            enabled = false
+        }
+    }
+    client.tasks.named('jar').configure {
+        setDependsOn([])
+        setFinalizedBy([])
+        destinationDirectory.set(directory)
+        archiveFileName.set('client.jar')
+        enabled = false
+    }
+    }
+}

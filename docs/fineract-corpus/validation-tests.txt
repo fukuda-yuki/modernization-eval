@@ -1,0 +1,23 @@
+test_added_private_or_host_file_fails_verification (test_producer.FullCorpusTests.test_added_private_or_host_file_fails_verification) ... ok
+test_existing_bundle_is_never_overwritten (test_producer.FullCorpusTests.test_existing_bundle_is_never_overwritten) ... ok
+test_feature_sections_have_body_bound_roles_and_mixed_roles_where_needed (test_producer.FullCorpusTests.test_feature_sections_have_body_bound_roles_and_mixed_roles_where_needed) ... ok
+test_manifest_metadata_and_selection_tampering_rejected (test_producer.FullCorpusTests.test_manifest_metadata_and_selection_tampering_rejected) ... ok
+test_metadata_and_navigation_are_bound_to_selection_seal (test_producer.FullCorpusTests.test_metadata_and_navigation_are_bound_to_selection_seal) ... ok
+test_savings_small_is_interest_material_and_fee_document_is_rest (test_producer.FullCorpusTests.test_savings_small_is_interest_material_and_fee_document_is_rest) ... ok
+test_seal_candidate_is_reproducible_and_does_not_replace_active_seal (test_producer.FullCorpusTests.test_seal_candidate_is_reproducible_and_does_not_replace_active_seal) ... ok
+test_seven_conditions_and_original_corpus_preserved (test_producer.FullCorpusTests.test_seven_conditions_and_original_corpus_preserved) ... ok
+test_tampered_prompt_cannot_be_resealed_by_updating_output_hashes (test_producer.FullCorpusTests.test_tampered_prompt_cannot_be_resealed_by_updating_output_hashes) ... ok
+test_two_offline_generations_are_byte_identical (test_producer.FullCorpusTests.test_two_offline_generations_are_byte_identical) ... ok
+test_archive_traversal_and_symlinks_are_rejected_even_with_matching_archive_hash (test_producer.MaterialUnitTests.test_archive_traversal_and_symlinks_are_rejected_even_with_matching_archive_hash) ... ok
+test_budget_stops_at_next_section_without_skipping (test_producer.MaterialUnitTests.test_budget_stops_at_next_section_without_skipping) ... ok
+test_dependency_membership_does_not_imply_target_relevance (test_producer.MaterialUnitTests.test_dependency_membership_does_not_imply_target_relevance) ... ok
+test_public_requests_contain_business_contracts_without_solution_locations (test_producer.MaterialUnitTests.test_public_requests_contain_business_contracts_without_solution_locations) ... ok
+test_requests_require_exact_bytes_opaque_spec_hash_and_frozen_priorities (test_producer.MaterialUnitTests.test_requests_require_exact_bytes_opaque_spec_hash_and_frozen_priorities) ... ok
+test_sections_preserve_utf8_tables_and_code_exactly (test_producer.MaterialUnitTests.test_sections_preserve_utf8_tables_and_code_exactly) ... ok
+test_source_archive_hash_cannot_be_silently_refreshed (test_producer.MaterialUnitTests.test_source_archive_hash_cannot_be_silently_refreshed) ... ok
+test_unbalanced_block_is_whole_and_reported (test_producer.MaterialUnitTests.test_unbalanced_block_is_whole_and_reported) ... ok
+
+----------------------------------------------------------------------
+Ran 18 tests in 30.309s
+
+OK

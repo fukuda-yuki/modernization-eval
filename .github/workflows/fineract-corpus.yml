@@ -1,0 +1,27 @@
+name: Fineract corpus materials
+on:
+  pull_request:
+    paths:
+      - 'tools/fineract_corpus/**'
+      - 'tests/fineract_corpus/**'
+      - 'docs/fineract-corpus/**'
+      - '.github/workflows/fineract-corpus.yml'
+  push:
+    branches: ['codex/issue-36-fineract-corpus']
+permissions:
+  contents: read
+jobs:
+  reproducibility:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Fetch only locked public source
+        run: python -m tools.fineract_corpus fetch --output "$RUNNER_TEMP/fineract.tar.gz"
+      - name: Verify complete corpus twice and reject input corruption
+        env:
+          FINERACT_SOURCE_ARCHIVE: ${{ runner.temp }}/fineract.tar.gz
+        run: python -m unittest discover -s tests/fineract_corpus -v

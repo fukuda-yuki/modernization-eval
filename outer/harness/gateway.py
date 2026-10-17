@@ -9,11 +9,14 @@ import hashlib
 import http.client
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import math
 import os
 from pathlib import Path
 import socket
 import signal
+import queue
 import threading
+import time
 import uuid
 
 
@@ -119,19 +122,113 @@ def response_tool_ids(raw):
     return ids
 
 
+class RequestDeadline:
+    """Own and abort sockets at an opt-in monotonic absolute request deadline."""
+    def __init__(self, seconds, client_socket):
+        self.started = time.monotonic()
+        self.end = self.started + seconds
+        self.expired = threading.Event()
+        self.lock = threading.RLock()
+        self.finished = False
+        self.sockets = {client_socket}
+        self.timer = threading.Timer(seconds, self.expire)
+        self.timer.daemon = True
+        self.timer.start()
+
+    @staticmethod
+    def abort(sock):
+        try: sock.shutdown(socket.SHUT_RDWR)
+        except OSError: pass
+        try: sock.close()
+        except OSError: pass
+
+    def expire(self):
+        with self.lock:
+            if self.finished: return
+            self.expired.set()
+            for sock in self.sockets: self.abort(sock)
+
+    def remaining(self):
+        remaining = self.end - time.monotonic()
+        if self.expired.is_set() or remaining <= 0:
+            self.expire()
+            raise TimeoutError('Absolute upstream deadline')
+        return remaining
+
+    def add(self, sock):
+        with self.lock:
+            self.sockets.add(sock)
+            self.remaining()
+        return sock
+
+    def connect_socket(self, address, timeout, source_address=None):
+        # getaddrinfo has no cancellable timeout. Its daemon only resolves names;
+        # it never creates a socket or sends a provider request after this wait ends.
+        resolved = queue.Queue(maxsize=1)
+        def resolve():
+            try: resolved.put((socket.getaddrinfo(*address, 0, socket.SOCK_STREAM), None))
+            except Exception as exc: resolved.put((None, exc))
+        threading.Thread(target=resolve, daemon=True).start()
+        try: addresses, error = resolved.get(timeout=self.remaining())
+        except queue.Empty:
+            self.expire()
+            raise TimeoutError('Absolute DNS deadline') from None
+        if error: raise error
+        error = OSError('No upstream address')
+        for family, kind, proto, _, endpoint in addresses:
+            self.remaining()
+            sock = self.add(socket.socket(family, kind, proto))
+            try:
+                sock.settimeout(min(timeout, self.remaining()))
+                if source_address: sock.bind(source_address)
+                sock.connect(endpoint)
+                self.remaining()
+                return sock
+            except OSError as exc:
+                error = exc
+                self.abort(sock)
+        raise error
+
+    def finish(self):
+        with self.lock:
+            if time.monotonic() >= self.end: self.expire()
+            self.finished = True
+            self.timer.cancel()
+            return self.expired.is_set()
+
+
+class DeadlineHTTPSConnection(http.client.HTTPSConnection):
+    def connect(self):
+        http.client.HTTPConnection.connect(self)
+        # Register the SSL socket before the (possibly stalled) handshake. The
+        # watchdog can then shutdown it while Python/OpenSSL is blocked.
+        with self.request_deadline.lock:
+            self.request_deadline.remaining()
+            self.sock = self._context.wrap_socket(self.sock,
+                server_hostname=self._tunnel_host or self.host, do_handshake_on_connect=False)
+            self.request_deadline.add(self.sock)
+        self.sock.settimeout(min(self.timeout, self.request_deadline.remaining()))
+        self.sock.do_handshake()
+        self.request_deadline.remaining()
+
+
 class Gateway(ThreadingHTTPServer):
     daemon_threads = False
 
     def __init__(self, address, root, run_id, model, secret, *, upstream_host='opencode.ai',
                  upstream_port=443, tls=True, session_id=None, upstream_timeout=120, expected_prompt=None,
-                 staged_input=None):
+                 staged_input=None, campaign_budget=None, upstream_deadline=None):
+        if upstream_deadline is not None and (not math.isfinite(upstream_deadline) or upstream_deadline <= 0):
+            raise ValueError('Positive finite upstream deadline required')
         super().__init__(address, Handler)
         self.root, self.run_id, self.model, self.secret = Path(root), run_id, model, secret
         self.session_id = session_id or run_id
         self.upstream_host, self.upstream_port, self.tls = upstream_host, upstream_port, tls
         self.upstream_timeout = upstream_timeout
+        self.upstream_deadline = upstream_deadline
         self.expected_prompt = Path(expected_prompt).read_bytes().decode('utf-8') if expected_prompt else None
         self.input_checked = False
+        self.campaign_budget = campaign_budget
         self.lock = threading.Lock()
         self.failed = threading.Event()
         self.stopping = threading.Event()
@@ -444,13 +541,31 @@ class Handler(BaseHTTPRequestHandler):
         upstream_socket = None
         sent_headers = False
         response_fence = None
+        campaign_reserved = False
+        deadline = None
         try:
-            cls = http.client.HTTPSConnection if g.tls else http.client.HTTPConnection
+            if g.campaign_budget is not None:
+                try:
+                    g.campaign_budget.reserve(rid, g.session_id)
+                    campaign_reserved = True
+                    event['campaign_admission'] = 'reserved'
+                except Exception:
+                    event['campaign_admission'] = 'denied_or_unavailable'
+                    g.admission_closed.set()
+                    raise
+            if g.upstream_deadline is not None:
+                deadline = RequestDeadline(g.upstream_deadline, self.connection)
+                event['upstream_deadline_seconds'] = g.upstream_deadline
+            cls = (DeadlineHTTPSConnection if deadline else http.client.HTTPSConnection) if g.tls else http.client.HTTPConnection
             connection = cls(g.upstream_host, g.upstream_port, timeout=g.upstream_timeout)
+            if deadline:
+                connection.request_deadline = deadline
+                connection._create_connection = deadline.connect_socket
             connection.connect()
             upstream_socket = connection.sock
             g.track_socket(upstream_socket)
             with g.admission_lock:
+                if deadline: deadline.remaining()
                 if g.admission_closed.is_set() or g.stopping.is_set() or g.failed.is_set():
                     raise ConnectionAbortedError()
                 if g.uses_response_barrier() and not g.stage_capture_complete:
@@ -492,6 +607,7 @@ class Handler(BaseHTTPRequestHandler):
                 event['transmitted_at'] = now()
                 g.record('transmission.jsonl', {**event, 'phase': 'local_send_returned'})
             response = connection.getresponse()
+            if deadline: deadline.remaining()
             event['provider_acknowledged'] = True
             event['http_status'] = response.status
             if response.status != 200:
@@ -503,7 +619,9 @@ class Handler(BaseHTTPRequestHandler):
             sent_headers = True
             connected = True
             while True:
+                if deadline: deadline.remaining()
                 chunk = response.read1(16384)
+                if deadline: deadline.remaining()
                 safe = filt.feed(chunk, final=not chunk)
                 response_bytes.extend(safe)
                 original.write(safe)
@@ -527,6 +645,7 @@ class Handler(BaseHTTPRequestHandler):
                 g.hold_response_end(event, bytes(response_bytes))
                 self.wfile.write(response_fence.tail);self.wfile.flush()
             event.update(parse_sse(bytes(response_bytes)))
+            if deadline: deadline.remaining()
             event['status'] = 'completed' if response.status == 200 and event['stream_done'] else 'provider_error'
         except Exception as exc:
             # Never log exception messages: upstream errors can include credentials.
@@ -542,6 +661,10 @@ class Handler(BaseHTTPRequestHandler):
                 except OSError:
                     pass
         finally:
+            if deadline:
+                expired = deadline.finish()
+                event['upstream_elapsed_seconds'] = time.monotonic() - deadline.started
+                if expired: event['status'] = 'provider_deadline_exceeded'
             if g.stopping.is_set() and not event.get('stream_done'):
                 event['status'] = 'cancelled'
             if connection:
@@ -574,6 +697,13 @@ class Handler(BaseHTTPRequestHandler):
                     (g.admission_closed.is_set() and event['send_evidence'] == 'known_no_send')):
                 g.failed.set()
             g.record('events.jsonl', event)
+            if campaign_reserved:
+                try:
+                    g.campaign_budget.finish(rid, event.get('usage'), event['status'])
+                except Exception:
+                    g.failed.set()
+                    g.record('control.jsonl', {'run_id':g.run_id, 'at':now(),
+                                             'reason':'campaign_usage_persistence_failed'})
             if g.failed.is_set():
                 g.record('failure.jsonl', {'run_id': g.run_id, 'request_id': rid,
                                           'status': event['status'], 'at': now()})
@@ -618,17 +748,27 @@ def main():
     p.add_argument('--model', required=True)
     p.add_argument('--session-id')
     p.add_argument('--upstream-timeout', type=int, default=120)
+    p.add_argument('--upstream-deadline', type=float,
+                   help='Opt-in absolute monotonic limit across DNS/connect/TLS/headers/body')
     p.add_argument('--directory', default='/records')
     p.add_argument('--expected-prompt')
     p.add_argument('--staged-input', help='Controller-only contract directory; never a worker mount')
+    p.add_argument('--campaign-budget', help='Trusted shared admission database; never a worker mount')
     args = p.parse_args()
     import sys
     secret = sys.stdin.readline().strip()
     if not secret:
         raise SystemExit('Gateway credential is missing')
+    budget = None
+    if args.campaign_budget:
+        from campaign_budget import Budget
+        budget = Budget(args.campaign_budget)
+        budget.snapshot()  # Refuse missing/unreadable policy before listening.
     server = Gateway(('0.0.0.0', 8080), args.directory, args.run_id, args.model, secret,
                      session_id=args.session_id, upstream_timeout=args.upstream_timeout,
-                     expected_prompt=args.expected_prompt, staged_input=args.staged_input)
+                     upstream_deadline=args.upstream_deadline,
+                     expected_prompt=args.expected_prompt, staged_input=args.staged_input,
+                     campaign_budget=budget)
     server.serve_with_signals()
 
 

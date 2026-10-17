@@ -1,0 +1,55 @@
+{
+  "budgets_bytes": [
+    8192,
+    32768,
+    131072
+  ],
+  "excluded": [
+    "gold patches",
+    "private evaluators",
+    "hidden expectations",
+    "successful task runs"
+  ],
+  "exposure": [
+    "Issue #36 and #37 public bodies",
+    "pinned baseline documentation, source, public tests"
+  ],
+  "revision": 2,
+  "rule": "Rank by primary-subject selection_feature_ids intersecting target_features, then common_features, then fixed corpus path and byte start. Broad feature_ids include dependencies and are for navigation only. Source chapter tags identify their subject; researcher reconstructions explicitly distinguish primary subject from shared capabilities. Stop at the first whole unit exceeding budget; never skip or truncate.",
+  "schema_version": 1,
+  "selection_frozen_at": "2026-10-16T18:37:52Z",
+  "selection_time_basis": "Public-only independent reseal after review of v1 metadata; no gold patch, private draft, hidden expectation or model outcome accessed. Frozen before candidate generation.",
+  "tasks": {
+    "FINERACT-CHARGE-TEMPLATE": {
+      "common_features": [
+        "working-capital",
+        "api-contract",
+        "organization-access",
+        "accounting"
+      ],
+      "target_features": [
+        "charges"
+      ]
+    },
+    "FINERACT-DELINQUENCY-RESUME": {
+      "common_features": [
+        "business-date-cob",
+        "events",
+        "persistence"
+      ],
+      "target_features": [
+        "loan-delinquency"
+      ]
+    },
+    "FINERACT-SAVINGS-MONTH-END": {
+      "common_features": [
+        "business-date-cob",
+        "accounting",
+        "api-contract"
+      ],
+      "target_features": [
+        "savings-deposits"
+      ]
+    }
+  }
+}

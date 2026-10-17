@@ -7,10 +7,13 @@ from pathlib import Path
 from subprocess import CompletedProcess, TimeoutExpired
 import tempfile
 import threading
+import time
 import unittest
 from unittest.mock import patch
 
+import support
 from harness import gateway, runtime, util
+from harness.campaign_budget import Budget
 
 
 HTTPConnection = http.client.HTTPConnection
@@ -148,6 +151,28 @@ class AdmissionFenceTests(unittest.TestCase):
             self.assertTrue(self.proxy.stopping.is_set())
             self.assertTrue(self.proxy.admission_closed.is_set())
             self.assertIsNone(self.proxy.admission_receipt)
+
+    def test_campaign_cap_stops_before_any_extra_upstream_send(self):
+        budget = Budget.create(self.root/'campaign.sqlite', campaign_id='test',
+            plan_sha256='a'*64, max_requests=1, max_tokens=100, deadline=time.time()+60)
+        self.proxy.campaign_budget = budget
+        self.assertEqual(self.request()[0], 200)
+        self.assertEqual(self.request()[0], 502)
+        self.proxy.shutdown(); self.proxy.server_close()
+        self.assertEqual(len(self.received), 1)
+        summary = budget.snapshot()
+        self.assertEqual(summary['reserved_requests'], 1)
+        self.assertEqual(summary['observed_tokens'], 14)
+        events = util.read_lines(self.root/'events.jsonl')
+        denied = next(e for e in events if e['campaign_admission']=='denied_or_unavailable')
+        self.assertEqual(denied['send_evidence'], 'known_no_send')
+        self.assertIsNone(denied['usage'])
+
+    def test_missing_campaign_policy_never_connects_upstream(self):
+        self.proxy.campaign_budget = Budget(self.root/'missing.sqlite')
+        self.assertEqual(self.request()[0], 502)
+        self.assertEqual(self.received, [])
+        self.assertTrue(self.proxy.admission_closed.is_set())
 
 
 class OwnedFenceFaultTests(unittest.TestCase):

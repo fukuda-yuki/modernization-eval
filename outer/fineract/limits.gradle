@@ -1,0 +1,11 @@
+// Identical resource policy for every condition, also used for preparation.
+// Build code is untrusted; container limits provide the actual upper bound.
+allprojects {
+    tasks.withType(Test).configureEach {
+        maxParallelForks = 1
+        maxHeapSize = '768m'
+    }
+    tasks.withType(JavaCompile).configureEach {
+        options.forkOptions.memoryMaximumSize = '768m'
+    }
+}
