@@ -126,7 +126,13 @@ def recover_owned(root,settings,plan,ledger):
         if not attempt.get('stop_confirmed'):
             attempt.update(stop_confirmed=stopped,status='finished' if stopped else 'stop_unconfirmed',end_reason='recovered_interruption')
         if stopped and (record/'initialized.json').exists() and not (record/'artifact.json').exists():
-            try:attempt['submission_sha256']=box.collect(record,settings)['sha256']
+            try:
+                # Retain the standard Run stop/log evidence required by the real collector.
+                # An older receipt (including an unconfirmed stop) is never overwritten.
+                evidence=record/'stop' if not (record/'stop/result.json').exists() else folder/'runs'/attempt['run_uuid']/'stop'
+                box.stop(record,'recovered_interruption',evidence=evidence)
+                attempt['submission_sha256']=box.collect(record,settings,stop_record=evidence)['sha256']
+                receipt['collections'].append({'record':str(record),'stop_record':str(evidence),'collected':True})
             except Exception as error:receipt['errors'].append({'operation':'collect','run_uuid':attempt['run_uuid'],'type':type(error).__name__})
         for request in (record/'evaluations').glob('*/request.json'):
             if not request.with_name('result.json').exists():receipt['incomplete_evaluations'].append({'run_uuid':attempt['run_uuid'],'evaluation_id':request.parent.name,'request_sha256':util.sha256_file(request),'quality':None})

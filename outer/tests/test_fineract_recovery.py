@@ -9,7 +9,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from outer.fineract import controller,recovery,supervisor,lifecycle,evaluation
+from outer.fineract import controller,recovery,supervisor,lifecycle,evaluation,artifacts
 from outer.fineract.campaign import LIMITS,digest,make_plan
 from outer.harness import util,runtime
 from outer.harness.campaign_budget import Budget
@@ -59,6 +59,60 @@ def stage_resources(build):
 
 
 class RecoveryTests(unittest.TestCase):
+    def test_uncollected_run_recovery_uses_real_collector_and_preserves_repeat(self):
+        for prior_stop in (False,True):
+            with self.subTest(prior_unconfirmed_stop=prior_stop),tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp);settings,plan,ledger,budget=campaign(root)
+                settings['worker_image']='offline-collector-fixture';util.write_json_atomic(root/'settings.json',settings)
+                ledger['settings_sha256']=digest(settings)
+                attempt=controller.new_attempt(ledger,ledger['assignments'][0],ledger['started_epoch'])
+                ident=attempt['run_uuid'];record=root/'runs'/ident;record.mkdir(parents=True)
+                names={role:'fixture-'+role+'-'+ident for role in ('gateway','worker','database','data','records')}
+                util.write_new_json(record/'box.json',{'id':ident,'names':names})
+                util.write_new_json(record/'initialized.json',{'fixture':True})
+                util.write_json_atomic(root/'ledger.json',ledger)
+                source=root/'fixture-source';source.mkdir();(source/'Main.java').write_text('class Main {}',encoding='utf-8')
+                old_stop=None
+                if prior_stop:
+                    util.write_new_json(record/'stop/result.json',{'stop_confirmed':False,'at':'earlier attempt'})
+                    old_stop=(record/'stop/result.json').read_bytes()
+                states={names[role]:{'Config':{'Labels':{'modernization.run':ident}},'State':{'Running':True,'ExitCode':0}}
+                        for role in ('gateway','worker','database')}
+                collections=[]
+                def docker(*args,**kwargs):
+                    if args[0]=='stop':states[args[-1]]['State']['Running']=False
+                    elif args[0]=='run':
+                        # Only Docker execution is replaced; box.stop/collect and source packing are real.
+                        self.assertFalse(any(s['State']['Running'] for s in states.values()))
+                        self.assertIn('--network',args);self.assertIn('none',args)
+                        result=artifacts.pack_source(source,record/'submission.tar')
+                        util.write_new_json(record/'artifact.json',result)
+                        util.write_new_json(record/'usage/fixture.json',{'fixture':True,'requests':0,'tokens':0})
+                        collections.append(result['sha256'])
+                    elif args[0]!='logs':self.fail('Unexpected Docker operation: '+args[0])
+                    return SimpleNamespace(stdout='offline fixture log\n',stderr='',returncode=0)
+                def action(settings,operation,arguments=None):
+                    if operation=='close':budget.close(arguments['reason'])
+                    return budget.snapshot()
+                with patch.object(runtime,'inspect_container',side_effect=lambda name:copy.deepcopy(states.get(name))),patch.object(runtime,'docker',side_effect=docker),patch.object(controller.box,'budget_action',side_effect=action),patch.object(controller.box,'launch') as launch:
+                    first=controller.recover(root)
+                    frozen=util.tree_hashes(record);accounting=budget.snapshot()
+                    second=controller.recover(root)
+                launch.assert_not_called()
+                self.assertTrue(first['recovery_complete']);self.assertTrue(second['recovery_complete'])
+                self.assertEqual(len(collections),1);self.assertEqual(frozen,util.tree_hashes(record))
+                self.assertEqual(accounting,budget.snapshot());self.assertEqual(accounting['closed_reason'],'recovery')
+                saved=util.read_json(root/'ledger.json')['attempts'][0]
+                self.assertEqual(saved['run_uuid'],ident);self.assertEqual(saved['submission_sha256'],collections[0])
+                self.assertEqual(util.sha256_file(record/'submission.tar'),collections[0])
+                receipt=util.read_json(Path(first['recovery_record'])/'result.json')
+                evidence=Path(receipt['collections'][0]['stop_record'])
+                self.assertTrue(util.read_json(evidence/'result.json')['stop_confirmed'])
+                for role in ('worker','gateway','database'):
+                    self.assertTrue((evidence/(role+'.stdout.log')).exists())
+                self.assertEqual(util.read_json(record/'usage/fixture.json')['requests'],0)
+                if old_stop is not None:self.assertEqual(old_stop,(record/'stop/result.json').read_bytes())
+
     @unittest.skipUnless(os.name=='nt','Windows CIM launch failure boundary')
     def test_launch_rejection_has_no_interactive_fallback_or_second_launch(self):
         with tempfile.TemporaryDirectory() as tmp:

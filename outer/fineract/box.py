@@ -256,9 +256,9 @@ def poll(root):
     return result
 
 
-def stop(root,reason):
-    root=Path(root);data=util.read_json(root/'box.json');evidence=root/'stop'
-    evidence.mkdir(exist_ok=True)
+def stop(root,reason,*,evidence=None):
+    root=Path(root);data=util.read_json(root/'box.json');evidence=Path(evidence) if evidence is not None else root/'stop'
+    evidence.mkdir(parents=True,exist_ok=True)
     if (evidence/'result.json').exists():return util.read_json(evidence/'result.json')
     gateway=owned(data,'gateway');fenced=False
     if gateway and gateway['State']['Running']:
@@ -284,9 +284,10 @@ def stop(root,reason):
     return result
 
 
-def collect(root,settings):
+def collect(root,settings,*,stop_record=None):
     root=Path(root);data=util.read_json(root/'box.json')
-    if not util.read_json(root/'stop/result.json')['stop_confirmed']:raise ValueError('Confirmed stop required')
+    evidence=Path(stop_record) if stop_record is not None else root/'stop'
+    if not util.read_json(evidence/'result.json')['stop_confirmed']:raise ValueError('Confirmed stop required')
     if (root/'artifact.json').exists():return util.read_json(root/'artifact.json')
     script="""import json,shutil
 from pathlib import Path
