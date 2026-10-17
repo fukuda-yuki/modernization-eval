@@ -233,3 +233,56 @@ python -m outer.fineract.continuation continue --record <existing-campaign>
 Original plan, settings, approval, readiness, Run UUIDs, evaluations, submissions,
 request/token reservations and wall deadline are preserved. An interruption of
 this continuation requires explicit recovery; it is never automatically replayed.
+
+## Independent owner and explicit resource recovery
+
+The `controller run` and `continuation continue` CLI entry points now return after
+registering a one-shot independent owner. They do not keep a long interactive
+command alive. On Windows, the selected backend is `Win32_Process.Create` via
+CIM, with a hidden window and an allowlisted child environment. The owner refuses
+dispatch if it remains in a Windows Job. There is no fallback to the interactive
+Job, scheduled service, automatic restart, or budget reopening. See Microsoft's
+[Job Object inheritance documentation](https://learn.microsoft.com/en-us/windows/win32/procthread/job-objects).
+
+`supervisor/` retains the launch ID, campaign/plan/settings/runtime bindings,
+owner and child PID plus OS creation identity, separate private stdout/stderr,
+atomic heartbeat, and child exit receipt. Windows exit time comes from the
+retained process handle. A successful process exit is normal only when the
+controller ledger is terminal. Exceptions and nonterminal exits trigger one
+bounded recovery attempt. An owner lost to forced termination or shutdown may
+leave no exit receipt; `status` records absence with unknown exit values instead
+of inferring an exit code from a stale heartbeat.
+
+```text
+python -m outer.fineract.supervisor status --record <campaign>
+python -m outer.fineract.supervisor stop --record <campaign>
+python -m outer.fineract.controller recover --record <interrupted-campaign>
+```
+
+`stop` first requests an orderly stop; any subsequent forced child stop verifies
+OS creation identity and uses an owned process handle. Recovery rejects a live
+owner/controller, identity ambiguity, or a concurrent writer. A stopped child is
+not automatically restarted. The original deadline, limits and consumed budget
+remain authoritative. PC shutdown still interrupts the owner; independence from
+the interactive command does not make the machine permanently available.
+
+New campaigns record explicit ownership from campaign to Run to outer evaluation
+request to build request before Docker creation. Recovery follows this binding
+and nested service/check intents, then verifies current Docker labels and state.
+Matching a submission hash and timestamp alone never authorizes a stop. It closes
+admission, stops gateways first, continues across individual stop failures, and
+collects already-produced stage evidence without starting another evaluation.
+Original completed results are immutable; incomplete outer evaluations remain
+null. Each recovery has its own pre-recovery ledger/budget snapshots and receipt
+with separate admission, model-stop, evaluation-stop and completeness fields.
+Legacy campaigns without this ownership schema are refused before mutation; use
+their retained explicit recovery receipts for historical evidence. Do not add
+ownership retroactively or reopen a closed campaign.
+
+The ordinary unit suite includes failure injection for ownership, concurrent
+writers, partial stops, interrupted recovery, closed/deadline refusal and all
+scheduled waves through a non-model adapter. Explicit platform probes live in
+`outer.tests.fineract_process_probe` and `outer.tests.fineract_docker_probe`; they
+require new output directories. The latter can use a retained successful build
+for an app/DB startup-and-recovery exercise, without running quality checks.
+Probe evidence belongs outside Git and must not be mixed with acquisition data.

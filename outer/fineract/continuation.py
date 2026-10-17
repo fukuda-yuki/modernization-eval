@@ -37,24 +37,10 @@ def process_alive(pid):
     except ProcessLookupError:return False
     return True
 
-def evaluation_resources(settings,ledger):
-    """Discover only evaluator stages bound to this campaign's exact submissions."""
-    import datetime
-    hashes={a.get('submission_sha256') for a in ledger['attempts']}
-    directory=Path(settings['preparation']).resolve().parent.parent/'fineract-evaluations'
-    found=[]
-    for path in directory.glob('*/request.json'):
-        data=util.read_json(path)
-        at=datetime.datetime.fromisoformat(data['at'].replace('Z','+00:00')).timestamp()
-        if data.get('submission_sha256') not in hashes or at<ledger['started_epoch']:continue
-        found.append((path.parent,data['container'],'modernization.evaluation',data['id']))
-        for intent in path.parent.glob('services/*/intent.json'):
-            service=util.read_json(intent)
-            for role in ('app','database'):
-                found.append((intent.parent,service['names'][role],'modernization.service',service['id']))
-            for pattern,label in (('java-api-checks/*/request.json','modernization.java_api'),('api-checks/*/request.json','modernization.api_check')):
-                for check in intent.parent.glob(pattern):
-                    item=util.read_json(check);found.append((check.parent,item['container'],label,item['id']))
+def evaluation_resources(settings,ledger,root):
+    from .recovery import evaluation_resources as owned_resources
+    found,errors=owned_resources(root,settings,ledger)
+    if errors:raise ValueError('Unverified evaluation ownership; explicit review required')
     return found
 
 def scoped_context(root,settings,plan,actual):
@@ -88,7 +74,7 @@ def stopped_checkpoint(root,settings,plan,ledger):
             if item and item['State']['Running']:raise ValueError('An owned Run container is still active')
         if util.sha256_file(record/'submission.tar')!=attempt['submission_sha256']:
             raise ValueError('Original submission changed')
-    for record,name,label,ident in evaluation_resources(settings,ledger):
+    for record,name,label,ident in evaluation_resources(settings,ledger,root):
         item=runtime.inspect_container(name)
         if item and (item['Config']['Labels'].get(label)!=ident or item['State']['Running']):
             raise ValueError('An owned evaluator is active or its identity changed')
@@ -138,6 +124,12 @@ def prepare_scope(record,base_runtime,decision_reference,decision_sha256,supervi
     return {'record':str(root),'checkpoint':str(folder),'budget':budget,'scope_sha256':ledger['administrative_handoff']['scope_sha256']}
 
 def continue_campaign(record,*,pause_after_wave=False):
+    from .lifecycle import writer
+    if controller.load(record)[3]['phase']!='paused_for_confirmation_scope':raise ValueError('A sealed one-use handoff checkpoint is required')
+    with writer(record):return _continue_campaign(record,pause_after_wave=pause_after_wave)
+
+
+def _continue_campaign(record,*,pause_after_wave=False):
     root,settings,plan,ledger=controller.load(record)
     if pause_after_wave and not settings['synthetic']:raise ValueError('Test pause is synthetic only')
     if ledger['phase']!='paused_for_confirmation_scope':raise ValueError('A sealed one-use handoff checkpoint is required')
@@ -190,5 +182,8 @@ if __name__=='__main__':
     for key in ('decision-reference','decision-sha256'):q.add_argument('--'+key,required=True)
     q=sub.add_parser('continue');q.add_argument('--record',type=Path,required=True)
     a=p.parse_args()
-    result=prepare_scope(a.record,a.base_runtime,a.decision_reference,a.decision_sha256,a.supervisor_exit_receipt) if a.command=='prepare' else continue_campaign(a.record)
+    if a.command=='prepare':result=prepare_scope(a.record,a.base_runtime,a.decision_reference,a.decision_sha256,a.supervisor_exit_receipt)
+    else:
+        from .supervisor import launch
+        result=launch(a.record,'continue')
     print(json.dumps(result))

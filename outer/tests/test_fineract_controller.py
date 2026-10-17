@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from outer.fineract import controller
+from outer.fineract import controller,recovery
 from outer.fineract.campaign import LIMITS,digest,make_plan
 from outer.fineract.execution import case_status,quality,completed_successfully
 from outer.harness import runtime,util
@@ -111,7 +111,7 @@ class FiniteControllerTests(unittest.TestCase):
         plan=make_plan(fixture(),campaign_id='unit-test-no-model',seed=1,runtime_sha256='a'*64,
                        evaluator_sha256='b'*64,selection_seal_sha256='c'*64)
         settings={'synthetic':False}
-        ledger={'phase':'prepared','settings_sha256':digest(settings),'plan_sha256':digest(plan),
+        ledger={'phase':'prepared','ownership_version':1,'settings_sha256':digest(settings),'plan_sha256':digest(plan),
                 'attempts':[],'assignments':copy.deepcopy(plan['assignments']),'halt_reason':None}
         for name,value in [('plan',plan),('settings',settings),('ledger',ledger)]:
             util.write_new_json(root/(name+'.json'),value)
@@ -154,14 +154,14 @@ class FiniteControllerTests(unittest.TestCase):
             ledger.update(phase='recovery_required',deadline=time.time()+100)
             attempt=controller.new_attempt(ledger,ledger['assignments'][0],time.time())
             ident=attempt['run_uuid'];record=root/'runs'/ident;record.mkdir(parents=True)
-            util.write_new_json(record/'box.json',{'id':ident});util.write_new_json(record/'initialized.json',{})
+            util.write_new_json(record/'box.json',{'id':ident,'names':{r:r for r in ('gateway','worker','database')}});util.write_new_json(record/'initialized.json',{})
             util.write_json_atomic(root/'ledger.json',ledger);events=[]
-            with patch.object(controller.box,'budget_action',side_effect=lambda *a:events.append(a[1]) or {}),\
-                 patch.object(controller.box,'stop',side_effect=lambda *a:events.append('stop') or {'stop_confirmed':True}),\
+            with patch.object(controller.box,'budget_action',side_effect=lambda *a:events.append(a[1]) or {'closed_reason':'recovery'}),\
+                 patch.object(recovery,'stop_resource',side_effect=lambda *a:events.append('stop') or {'record':str(a[0]),'id':ident,'stop_confirmed':True}),\
                  patch.object(controller.box,'collect',return_value={'sha256':'d'*64}),\
                  patch.object(controller.box,'launch') as launch:
                 result=controller.recover(root)
-            self.assertEqual(events[:2],['close','stop']);launch.assert_not_called()
+            self.assertLess(events.index('close'),events.index('stop'));launch.assert_not_called()
             self.assertTrue(result['stop_confirmed'])
             self.assertEqual(util.read_json(root/'ledger.json')['attempts'][0]['run_uuid'],ident)
 
@@ -171,15 +171,16 @@ class FiniteControllerTests(unittest.TestCase):
             ledger.update(phase='recovery_required',deadline=time.time()+100)
             attempt=controller.new_attempt(ledger,ledger['assignments'][0],time.time())
             record=root/'runs'/attempt['run_uuid'];record.mkdir(parents=True)
-            util.write_new_json(record/'box.json',{'id':attempt['run_uuid']})
+            util.write_new_json(record/'box.json',{'id':attempt['run_uuid'],'names':{r:r for r in ('gateway','worker','database')}})
             util.write_json_atomic(root/'ledger.json',ledger)
             with patch.object(controller.box,'budget_action',side_effect=runtime.DockerCommandError('budget',RuntimeError('missing'))),\
-                 patch.object(controller.box,'stop',return_value={'stop_confirmed':True}) as stop,\
+                 patch.object(recovery,'stop_resource',side_effect=lambda *a:{'record':str(a[0]),'id':attempt['run_uuid'],'stop_confirmed':True}) as stop,\
                  patch.object(controller.box,'launch') as launch:
                 result=controller.recover(root)
-            stop.assert_called_once();launch.assert_not_called()
-            self.assertTrue(result['stop_confirmed'])
-            self.assertIsNone(util.read_json(root/'ledger.json')['budget'])
+            self.assertEqual(stop.call_count,3);launch.assert_not_called()
+            self.assertFalse(result['stop_confirmed'])
+            self.assertEqual(result['phase'],'recovery_required')
+            self.assertTrue(result['model_resources_stopped'])
 
 
 if __name__=='__main__':

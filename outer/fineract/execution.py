@@ -188,7 +188,7 @@ def db_input(spec,java_record,output):
     return output
 
 
-def evaluate(settings,task,run_record):
+def evaluate(settings,task,run_record,*,campaign_uuid=None):
     deadline=settings.get('evaluation_deadline',time.time()+3600)
     def remaining(limit):return max(0,min(limit,deadline-time.time()))
     run_record=Path(run_record).resolve();release_path,release,specs=release_specs(settings['evaluator_release'])
@@ -200,6 +200,8 @@ def evaluate(settings,task,run_record):
     request={'at':run.now(),'task':task,'submission_sha256':artifact['sha256'],
              'execution_spec_sha256':util.sha256_file(spec_path),'evaluator_sha256':settings['evaluator_sha256'],
              'model_calls':0}
+    if campaign_uuid is not None:
+        request['owner']={'campaign_uuid':campaign_uuid,'run_uuid':run_record.name,'evaluation_id':root.name}
     util.write_new_json(root/'request.json',request)
     result={**request,'build':'unknown','api':'unknown','database':'unknown',
             'quality':'unknown','service_stop_confirmed':True,'records':{}}
@@ -209,7 +211,9 @@ def evaluate(settings,task,run_record):
         for rel,entry in release['private_files'].items():
             if rel.startswith('private/') and util.sha256_file(release_path.parent/rel)!=entry['sha256']:
                 raise ValueError('Diagnostic Java bundle changed')
-        start=evaluation.begin(settings['preparation'],settings['seed'],private,submission)
+        ownership={} if campaign_uuid is None else {'owner':{**request['owner'],
+            'request_sha256':util.sha256_file(root/'request.json')},'outer_record':root}
+        start=evaluation.begin(settings['preparation'],settings['seed'],private,submission,**ownership)
         build=Path(start['record']);result['records']['build']=str(build)
         wait_for(evaluation.collect,build,remaining(1900))
         built=util.read_json(build/'result.json')

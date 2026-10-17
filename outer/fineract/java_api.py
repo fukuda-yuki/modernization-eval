@@ -165,7 +165,7 @@ def begin(harness, service, task=None):
 
 
 def collect(record):
-    root=Path(record).resolve();data=util.read_json(root/'started.json')
+    root=Path(record).resolve();data=util.read_json(root/('started.json' if (root/'started.json').exists() else 'request.json'))
     if (root/'result.json').exists():return summary(root,util.read_json(root/'result.json'))
     item=json.loads(runtime.docker('inspect',data['container']).stdout)[0]
     if item['Config']['Labels'].get('modernization.java_api')!=data['id']:raise ValueError('Ownership mismatch')

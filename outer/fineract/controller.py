@@ -79,6 +79,7 @@ def create(settings_path,plan_path,approval_path,readiness_path,output,*,synthet
     for name,value in [('settings',settings),('plan',plan),('approval',approval),('readiness',readiness)]:
         util.write_new_json(root/(name+'.json'),value)
     ledger={'kind':'fineract-finite-controller-v1','id':ident,'created_at':run.now(),
+            'ownership_version':1,
             'started_epoch':None,'deadline':None,'phase':'prepared','synthetic':synthetic,
             'plan_sha256':digest(plan),'settings_sha256':digest(settings),
             'attempts':[],'assignments':[dict(a,status='pending' if a['planned_status']=='scheduled' else 'not_run')
@@ -239,9 +240,16 @@ def wave(root,settings,plan,ledger,assignments,*,retry=False,halt_after_launch=F
 
 
 def execute(record,*,halt_after_launch=False):
+    from .lifecycle import writer
+    if load(record)[3]['phase']!='prepared':raise ValueError('Use recovery; never replay an existing campaign')
+    with writer(record):return _execute(record,halt_after_launch=halt_after_launch)
+
+
+def _execute(record,*,halt_after_launch=False):
     root,settings,plan,ledger=load(record)
     if ledger['phase']!='prepared':raise ValueError('Use recovery; never replay an existing campaign')
     readiness(root,settings,plan)
+    ledger['ownership_version']=1
     ledger['started_epoch']=time.time();ledger['deadline']=time.time()+LIMITS['wall_seconds']
     ledger['phase']='running';save(root,ledger,'campaign_started')
     box.budget_action(settings,'create',{'campaign_id':plan['campaign_id'],
@@ -276,28 +284,21 @@ def score_completed(root,settings,ledger):
         if attempt.get('submission_sha256') and 'evaluation' not in attempt:
             if time.time()>=ledger['deadline']:
                 ledger['halt_reason']='wall_deadline';break
-            attempt['evaluation']=evaluate({**settings,'evaluation_deadline':ledger['deadline']},attempt['task'],root/'runs'/attempt['run_uuid'])
+            attempt['evaluation']=evaluate({**settings,'evaluation_deadline':ledger['deadline']},attempt['task'],root/'runs'/attempt['run_uuid'],campaign_uuid=ledger['id'])
             save(root,ledger,'evaluation_saved')
 
 
 def recover(record):
-    root,settings,plan,ledger=load(record)
-    if ledger['phase']=='prepared':raise ValueError('Campaign never started')
-    try:box.budget_action(settings,'close',{'reason':'recovery'})
-    except (runtime.DockerCommandError,TimeoutError) as error:
-        # A crash before budget creation must not prevent per-gateway fencing.
-        ledger['budget_recovery_error_type']=type(error).__name__
-    for attempt in ledger['attempts']:
-        if not attempt.get('stop_confirmed'):
-            finish(root,settings,attempt,'recovered_interruption')
-    ledger['halt_reason']='recovery';ledger['phase']='recovered'
-    try:ledger['budget']=box.budget_action(settings,'snapshot')
-    except (runtime.DockerCommandError,TimeoutError):ledger['budget']=None
-    for assignment in ledger['assignments']:
-        if not any(a['assignment_id']==assignment['assignment_id'] for a in ledger['attempts']):
-            assignment.update(status='not_run',not_run_reason='recovery')
-    save(root,ledger,'recovered_without_model_replay')
-    return {'record':str(root),'phase':'recovered','stop_confirmed':all(a['stop_confirmed'] for a in ledger['attempts'])}
+    from .lifecycle import writer
+    from .supervisor import assert_inactive
+    from .recovery import recover_owned
+    if load(record)[3].get('ownership_version')!=1:
+        raise ValueError('Legacy ownership is unverified; retain explicit historical recovery receipts without mutation')
+    with writer(record):
+        assert_inactive(Path(record).resolve())
+        root,settings,plan,ledger=load(record)
+        if ledger['phase']=='prepared':raise ValueError('Campaign never started')
+        return recover_owned(root,settings,plan,ledger)
 
 
 def main():
@@ -311,7 +312,11 @@ def main():
     a=p.parse_args()
     if a.command.startswith('create'):
         result=create(a.settings,a.plan,a.approval,a.readiness,a.output,synthetic=a.command=='create-probe')
-    elif a.command=='run':result=execute(a.record,halt_after_launch=a.halt_after_launch)
+    elif a.command=='run':
+        if a.halt_after_launch:result=execute(a.record,halt_after_launch=True)
+        else:
+            from .supervisor import launch
+            result=launch(a.record)
     elif a.command=='recover':result=recover(a.record)
     else:
         root,settings,plan,ledger=load(a.record)

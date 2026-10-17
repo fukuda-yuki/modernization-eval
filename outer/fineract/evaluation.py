@@ -10,7 +10,7 @@ from .artifacts import junit_result
 from .seed import volume
 
 
-def begin(preparation, seed, private, submission=None):
+def begin(preparation, seed, private, submission=None, *, owner=None, outer_record=None):
     prep_root=Path(preparation).resolve();prep=util.read_json(prep_root/'result.json')
     seed=util.read_json(Path(seed).resolve()/'result.json');private=Path(private).resolve()
     spec=util.read_json(private/'spec.json')
@@ -38,7 +38,17 @@ def begin(preparation, seed, private, submission=None):
         'adapter_files':util.tree_hashes(frozen_adapter),'private_files':util.tree_hashes(frozen_private),
         'expected_suites':spec['expected_suites'],'container':name,'volume':data,
         'model_calls':0,'business_verdict':'not_assigned'}
+    if owner is not None:
+        if outer_record is None:raise ValueError('Outer evaluation record required')
+        outer_record=Path(outer_record).resolve()
+        outer=util.read_json(outer_record/'request.json')
+        if owner!={**outer['owner'],'request_sha256':util.sha256_file(outer_record/'request.json')}:
+            raise ValueError('Outer evaluation ownership mismatch')
+        request['owner']=owner
     util.write_new_json(root/'request.json',request)
+    if owner is not None:
+        util.write_new_json(outer_record/'build-intent.json',{'record':str(root),'id':ident,
+            'request_sha256':util.sha256_file(root/'request.json')})
     volume(data,'modernization.evaluation='+ident,prep['java_image_id'])
     mounts=['--mount',f'type=volume,source={data},target=/work',
         '--mount',f'type=volume,source={seed["volume"]},target=/seed,readonly',
@@ -58,7 +68,7 @@ def begin(preparation, seed, private, submission=None):
 
 
 def collect(record):
-    root=Path(record).resolve();data=util.read_json(root/'started.json')
+    root=Path(record).resolve();data=util.read_json(root/('started.json' if (root/'started.json').exists() else 'request.json'))
     if (root/'result.json').exists():return summary(root,util.read_json(root/'result.json'))
     item=json.loads(runtime.docker('inspect',data['container']).stdout)[0]
     if item['Config']['Labels'].get('modernization.evaluation')!=data['id']:raise ValueError('Evaluation ownership mismatch')
